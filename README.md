@@ -2,6 +2,9 @@
 
 **Runs on Nebius Token Factory using NVIDIA Nemotron-3-Ultra-550b-a55b (planner) and NVIDIA Nemotron-3-Nano-30B-A3B (coder).**
 
+<img width="1586" height="837" alt="image" src="https://github.com/user-attachments/assets/18bd47fa-5052-4014-9a86-9a460518dea9" />
+
+
 PatchPilot turns a plain-language coding task into a planned, implemented, and
 independently tested Python project. It provides a React workspace with
 structured planning, live agent activity, project ZIP import, change diffs,
