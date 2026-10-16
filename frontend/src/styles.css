@@ -489,3 +489,96 @@ body { background: #0d100e; }
   .stats-inline { display: none; }
   .download-button { min-height: 27px; padding: 0 6px; font-size: 8px; }
 }
+
+.online-dot.setup-dot { background: #e2b66f; }
+.live-label.setup-label { color: #e2b66f; }
+.welcome {
+  width: min(1160px, calc(100% - 80px));
+  margin: clamp(34px, 6vh, 72px) auto 58px;
+  display: grid;
+  grid-template-columns: minmax(0, .88fr) minmax(420px, 1.12fr);
+  align-items: center;
+  gap: clamp(36px, 5vw, 72px);
+}
+.welcome-intro { min-width: 0; }
+.welcome .eyebrow { margin-bottom: 21px; }
+.welcome h1 { margin: 0; font-size: clamp(43px, 4.4vw, 59px); line-height: 1.04; letter-spacing: -2.8px; }
+.hero-subtitle { max-width: 420px; margin: 19px 0 0; color: #a5aca0; font-size: 14px; line-height: 1.8; }
+.model-attribution { margin-top: 23px; padding: 11px 13px; font-size: 10px; }
+.welcome-flow { margin-top: 31px; display: flex; align-items: center; gap: 11px; }
+.welcome-flow-step { display: flex; align-items: center; gap: 9px; }
+.welcome-flow-step > span { width: 27px; height: 27px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid #41493a; border-radius: 8px; background: #1b2019; color: var(--lime); font: 9px var(--mono); }
+.welcome-flow-step > div { display: flex; flex-direction: column; gap: 3px; }
+.welcome-flow-step strong { color: #dce2d4; font-size: 10px; font-weight: 600; }
+.welcome-flow-step small { color: #777f73; font-size: 9px; white-space: nowrap; }
+.welcome-flow-line { height: 1px; min-width: 10px; flex: 1; background: linear-gradient(90deg, #40493a, #30362e); }
+.welcome-builder { min-width: 0; padding: clamp(19px, 2.2vw, 29px); border: 1px solid #30372e; border-radius: 17px; background: radial-gradient(ellipse at 100% 0%, #718d3320, transparent 36%), linear-gradient(145deg, #1a1e19, #151815 70%); box-shadow: 0 24px 80px #0005, 0 1px 0 #ffffff08 inset; }
+.builder-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
+.builder-kicker { color: #a8c77a; font: 9px var(--mono); letter-spacing: 1px; }
+.builder-heading h2 { margin: 8px 0 0; color: #eef1e9; font-size: 18px; font-weight: 620; letter-spacing: -.45px; }
+.builder-language { min-height: 27px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; border: 1px solid #343b31; border-radius: 7px; background: #1c211a; color: #aab29f; font-size: 9px; }
+.welcome-builder .prompt-card { margin-top: 19px; padding: 8px; border-radius: 11px; }
+.welcome-builder .prompt-card textarea { min-height: 134px; padding: 12px; line-height: 1.7; }
+.prompt-footer { min-height: 44px; }
+.prompt-hint { color: #788071; font-size: 9px; }
+.welcome-builder .submit-button { min-height: 37px; }
+.welcome-builder .project-import { margin-top: 13px; min-height: 65px; padding: 10px 12px; }
+.welcome-builder .project-import-copy strong { font-size: 10px; }
+.welcome-builder .project-import-copy small { font-size: 9px; }
+.project-upload-button { flex: 0 0 auto; }
+.project-safety-note { margin: 8px 2px 0; }
+.welcome-builder .suggestion-heading { margin: 22px 0 10px; }
+.suggestion-heading .suggestion-line { display: none; }
+.welcome-builder .suggestions { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.welcome-builder .suggestion-card { min-height: 55px; padding: 0 9px; gap: 7px; font-size: 9px; }
+.welcome-builder .suggestion-icon { font-size: 13px; }
+.welcome-builder .suggestion-arrow { width: 12px; flex: 0 0 auto; }
+.builder-footnote { margin-top: 17px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; color: #81897b; font-size: 9px; }
+.builder-footnote svg { color: #a1b681; }
+
+@media (max-width: 1060px) {
+  .welcome { width: min(900px, calc(100% - 56px)); grid-template-columns: minmax(0, .82fr) minmax(390px, 1.18fr); gap: 30px; }
+  .welcome-flow { gap: 7px; }
+  .welcome-flow-step { gap: 6px; }
+  .welcome-flow-step small { font-size: 8px; }
+  .welcome-builder { padding: 20px; }
+}
+
+@media (max-width: 820px) {
+  .welcome { width: min(620px, calc(100% - 40px)); margin: 42px auto 46px; grid-template-columns: 1fr; gap: 27px; }
+  .welcome-intro { max-width: 570px; }
+  .welcome h1 { font-size: clamp(42px, 8vw, 54px); }
+  .hero-subtitle { max-width: 540px; }
+  .welcome-flow { max-width: 490px; margin-top: 23px; }
+  .welcome-builder { padding: clamp(17px, 4vw, 24px); }
+}
+
+@media (max-width: 520px) {
+  .welcome { width: calc(100% - 28px); margin: 30px auto 34px; gap: 22px; }
+  .welcome .eyebrow { margin-bottom: 15px; }
+  .welcome h1 { font-size: 39px; letter-spacing: -1.8px; }
+  .hero-subtitle { margin-top: 13px; font-size: 12px; line-height: 1.7; }
+  .model-attribution { margin-top: 15px; padding: 9px 10px; font-size: 9px; }
+  .welcome-flow { gap: 6px; margin-top: 19px; }
+  .welcome-flow-step { gap: 5px; }
+  .welcome-flow-step > span { width: 23px; height: 23px; border-radius: 6px; font-size: 8px; }
+  .welcome-flow-step strong { font-size: 9px; }
+  .welcome-flow-step small { max-width: 68px; font-size: 7px; white-space: normal; }
+  .welcome-flow-line { min-width: 4px; }
+  .welcome-builder { padding: 15px; border-radius: 13px; }
+  .builder-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .builder-heading h2 { font-size: 16px; }
+  .welcome-builder .prompt-card { margin-top: 14px; padding: 6px; }
+  .welcome-builder .prompt-card textarea { min-height: 122px; padding: 10px; font-size: 12px; }
+  .prompt-footer { gap: 6px; }
+  .prompt-hint { gap: 5px; font-size: 8px; }
+  .welcome-builder .submit-button { height: 34px; min-height: 34px; padding: 0 10px; font-size: 10px; }
+  .welcome-builder .project-import { gap: 8px; padding: 8px; }
+  .project-import-icon { width: 27px; height: 27px; }
+  .welcome-builder .project-import-copy small { font-size: 8px; }
+  .project-upload-button { min-height: 29px; padding: 0 7px; gap: 4px; font-size: 8px; }
+  .project-safety-note { align-items: flex-start; font-size: 8px; }
+  .welcome-builder .suggestions { grid-template-columns: 1fr; gap: 6px; }
+  .welcome-builder .suggestion-card { min-height: 43px; font-size: 10px; }
+  .builder-footnote { justify-content: flex-start; gap: 5px; font-size: 8px; }
+}

@@ -398,7 +398,7 @@ function App() {
         </div>
         <div className="side-bottom">
           <div className="model-card">
-            <div className="model-card-head"><span className="online-dot" /> AGENT STATUS <span className="live-label">LIVE</span></div>
+              <div className="model-card-head"><span className={`online-dot ${config?.api_key_configured ? "" : "setup-dot"}`} /> AGENT STATUS <span className={`live-label ${config?.api_key_configured ? "" : "setup-label"}`}>{config?.api_key_configured ? "READY" : "SETUP NEEDED"}</span></div>
             <div className="model-name">{coderDisplayName}</div>
             <div className="model-provider">Powered by Nebius Token Factory</div>
           </div>
@@ -426,63 +426,80 @@ function App() {
         <div className={`content ${hasRun ? "content-running" : ""}`}>
           {!hasRun ? (
             <section className="welcome">
-              <div className="eyebrow"><span className="eyebrow-icon"><Sparkles size={13} /></span> YOUR AI ENGINEERING TEAM</div>
-              <h1>Great software starts<br />with a <span>clear idea.</span></h1>
-              <p className="hero-subtitle">Describe what you want to build. PatchPilot plans it, writes the code, and runs the tests — so you can focus on what matters.</p>
-              <div className="model-attribution"><Sparkles size={14} /><strong>Runs on Nebius Token Factory using {plannerDisplayName} (planner) + {coderDisplayName} (coder)</strong></div>
-              <div className="prompt-card">
-                <label className="sr-only" htmlFor="task-input">Describe what you want to build</label>
-                <textarea
-                  id="task-input"
-                  ref={taskInput}
-                  value={task}
-                  onChange={(event) => setTask(event.target.value)}
-                  onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void startRun(); }}
-                  placeholder="Describe a feature, fix, or tool you want to create…"
-                  maxLength={4000}
-                />
-                <div className="prompt-footer">
-                  <div className="prompt-hint"><span className="language-pill"><Code2 size={13} /> Python + pytest</span><span className="hint-separator">·</span><span>Ctrl + Enter to run</span></div>
-                  <button className="submit-button" disabled={!task.trim() || running || projectUploading || !config} onClick={() => void startRun()}>
-                    Build with AI <ArrowUp size={16} />
-                  </button>
+              <div className="welcome-intro">
+                <div className="eyebrow"><span className="eyebrow-icon"><Sparkles size={13} /></span> YOUR AI ENGINEERING TEAM</div>
+                <h1>From idea<br />to <span>verified code.</span></h1>
+                <p className="hero-subtitle">A clear brief in. Tested, reviewable code out. Let PatchPilot plan the work, build it, and prove it with tests.</p>
+                <div className="model-attribution"><Sparkles size={14} /><strong>Runs on Nebius Token Factory using {plannerDisplayName} (planner) + {coderDisplayName} (coder)</strong></div>
+                <div className="welcome-flow" aria-label="How PatchPilot works">
+                  <div className="welcome-flow-step"><span>01</span><div><strong>Describe</strong><small>Tell us what you need</small></div></div>
+                  <span className="welcome-flow-line" />
+                  <div className="welcome-flow-step"><span>02</span><div><strong>Build</strong><small>Watch the agent work</small></div></div>
+                  <span className="welcome-flow-line" />
+                  <div className="welcome-flow-step"><span>03</span><div><strong>Verify</strong><small>Review tested changes</small></div></div>
                 </div>
               </div>
-              <div className={`project-import ${project ? "has-project" : ""}`}>
-                <input
-                  ref={projectInput}
-                  className="sr-only"
-                  type="file"
-                  accept=".zip,application/zip"
-                  aria-label="Import a project ZIP"
-                  disabled={projectUploading || running}
-                  onChange={(event) => void uploadProject(event.target.files?.[0])}
-                />
-                <div className="project-import-copy">
-                  <span className="project-import-icon"><Folder size={17} /></span>
-                  <span><strong>{project ? project.name : "Patch an existing Python project"}</strong><small>{project ? `${project.file_count} files imported · copied into a run workspace` : "Import a .zip Python codebase to make a tested change in context."}</small></span>
+
+              <div className="welcome-builder">
+                <div className="builder-heading">
+                  <div><span className="builder-kicker">START A NEW BUILD</span><h2>What would you like to make?</h2></div>
+                  <span className="builder-language"><Code2 size={13} /> Python + pytest</span>
                 </div>
-                {project ? (
-                  <button className="project-clear" type="button" onClick={() => void removeProject()} disabled={projectUploading || running} aria-label="Remove imported project">Remove</button>
-                ) : (
-                  <button className="project-upload-button" type="button" onClick={() => projectInput.current?.click()} disabled={projectUploading || running}>
-                    {projectUploading ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}
-                    {projectUploading ? "Importing…" : "Choose ZIP"}
-                  </button>
-                )}
+                <div className="prompt-card">
+                  <label className="sr-only" htmlFor="task-input">Describe what you want to build</label>
+                  <textarea
+                    id="task-input"
+                    ref={taskInput}
+                    value={task}
+                    onChange={(event) => setTask(event.target.value)}
+                    onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void startRun(); }}
+                    placeholder="Describe a feature, fix, or tool…&#10;&#10;What should it do? Include any requirements or edge cases."
+                    maxLength={4000}
+                  />
+                  <div className="prompt-footer">
+                    <div className="prompt-hint"><span>{task.length}/4000</span><span className="hint-separator">·</span><span>Ctrl + Enter to run</span></div>
+                    <button className="submit-button" disabled={!task.trim() || running || projectUploading || !config} onClick={() => void startRun()}>
+                      Build with AI <ArrowUp size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className={`project-import ${project ? "has-project" : ""}`}>
+                  <input
+                    ref={projectInput}
+                    className="sr-only"
+                    type="file"
+                    accept=".zip,application/zip"
+                    aria-label="Import a project ZIP"
+                    disabled={projectUploading || running}
+                    onChange={(event) => void uploadProject(event.target.files?.[0])}
+                  />
+                  <div className="project-import-copy">
+                    <span className="project-import-icon"><Folder size={17} /></span>
+                    <span><strong>{project ? project.name : "Already have a project?"}</strong><small>{project ? `${project.file_count} files imported · copied into a run workspace` : "Import a Python project ZIP and ask PatchPilot to improve it."}</small></span>
+                  </div>
+                  {project ? (
+                    <button className="project-clear" type="button" onClick={() => void removeProject()} disabled={projectUploading || running} aria-label="Remove imported project">Remove</button>
+                  ) : (
+                    <button className="project-upload-button" type="button" onClick={() => projectInput.current?.click()} disabled={projectUploading || running}>
+                      {projectUploading ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}
+                      {projectUploading ? "Importing…" : "Import ZIP"}
+                    </button>
+                  )}
+                </div>
+                <div className="project-safety-note"><LockKeyhole size={12} /><span>Secrets and dependency caches are excluded. Only upload code you trust: project tests run on this server.</span></div>
+                {projectError && <div className="error-banner project-error"><XCircle size={15} />{projectError}</div>}
+                {error && <div className="error-banner"><XCircle size={16} /> {error}</div>}
+
+                <div className="suggestion-heading"><span>OR TRY A QUICK START</span></div>
+                <div className="suggestions">
+                  {examples.map((example) => (
+                    <button className="suggestion-card" key={example.title} disabled={!config || running || projectUploading} onClick={() => { setTask(example.task); void startRun(example.task); }}>
+                      <span className="suggestion-icon">{example.icon}</span><span>{example.title}</span><ArrowUp size={14} className="suggestion-arrow" />
+                    </button>
+                  ))}
+                </div>
+                <div className="builder-footnote"><ShieldCheck size={13} /><span>Isolated workspace</span><span>·</span><span>Independent test verification</span><span>·</span><span>Review before you ship</span></div>
               </div>
-              <div className="project-safety-note"><LockKeyhole size={12} /><span>Secrets and dependency caches are excluded. Only upload code you trust: project tests run on this server.</span></div>
-              {projectError && <div className="error-banner project-error"><XCircle size={15} />{projectError}</div>}
-              {error && <div className="error-banner"><XCircle size={16} /> {error}</div>}
-              <div className="suggestion-heading"><span>NEED A STARTING POINT?</span><span className="suggestion-line" /></div>
-              <div className="suggestions">
-                {examples.map((example) => (
-                  <button className="suggestion-card" key={example.title} disabled={!config || running || projectUploading} onClick={() => { setTask(example.task); void startRun(example.task); }}>
-                    <span className="suggestion-icon">{example.icon}</span><span>{example.title}</span><ArrowUp size={14} className="suggestion-arrow" />
-                  </button>
-                ))}
-              </div>
-              <div className="trust-row"><LockKeyhole size={13} /><span>Each run gets its own temporary workspace</span><span className="trust-sep">·</span><span>Review generated code before using it</span></div>
             </section>
           ) : (
             <section className="session">
