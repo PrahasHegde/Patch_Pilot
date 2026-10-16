@@ -1,5 +1,8 @@
 # PatchPilot
 
+<img width="1882" height="1052" alt="image" src="https://github.com/user-attachments/assets/79e7dd3c-9072-4e85-947a-c7a5789cd1be" />
+
+
 **Runs on Nebius Token Factory using NVIDIA Nemotron-3-Ultra-550b-a55b (planner) and NVIDIA Nemotron-3-Nano-30B-A3B (coder).**
 
 PatchPilot turns a plain-language coding task into a planned, implemented, and
