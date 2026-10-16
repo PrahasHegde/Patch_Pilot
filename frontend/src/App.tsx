@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, ArrowUp, Check, CheckCircle2, ChevronDown, Circle, Clock3,
-  Code2, Command, FileCode2, Folder, Gauge, GitBranch, Layers3, LoaderCircle,
-  LockKeyhole, Plus, Radio, RotateCcw, Sparkles, Terminal, XCircle,
+  Code2, Command, Download, FileCode2, FileDiff, Folder, Gauge, GitBranch,
+  Layers3, LoaderCircle, LockKeyhole, Plus, Radio, RotateCcw, Sparkles,
+  Terminal, Upload, XCircle,
 } from "lucide-react";
 
 type Config = {
@@ -27,6 +28,8 @@ type StructuredPlan = {
 
 type GeneratedFile = { path: string; size: number };
 type Preview = { path: string; content: string };
+type ImportedProject = { project_id: string; name: string; file_count: number };
+type ProjectChange = { path: string; status: "added" | "modified" | "deleted"; diff: string };
 type RunStats = {
   passed: boolean;
   status?: "running" | "passed" | "failed";
@@ -58,11 +61,18 @@ function App() {
   const [stats, setStats] = useState<RunStats | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"output" | "activity">("output");
+  const [activeTab, setActiveTab] = useState<"output" | "review" | "activity">("output");
   const [recentTasks, setRecentTasks] = useState<string[]>([]);
+  const [project, setProject] = useState<ImportedProject | null>(null);
+  const [projectUploading, setProjectUploading] = useState(false);
+  const [projectError, setProjectError] = useState("");
+  const [changes, setChanges] = useState<ProjectChange[]>([]);
+  const [changesTruncated, setChangesTruncated] = useState(false);
+  const [selectedChange, setSelectedChange] = useState("");
   const source = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const taskInput = useRef<HTMLTextAreaElement>(null);
+  const projectInput = useRef<HTMLInputElement>(null);
   const plannerDisplayName = formatNvidiaModel(planner || config?.planner_model || "nvidia/Nemotron-3-Ultra-550b-a55b");
   const coderDisplayName = formatNvidiaModel(coder || config?.coder_model || "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B");
 
@@ -105,6 +115,9 @@ function App() {
     setPreviewError("");
     setSelectedFile("");
     setStats(null);
+    setChanges([]);
+    setChangesTruncated(false);
+    setSelectedChange("");
     setRunId("");
     setTask(nextTask);
     setError("");
@@ -149,7 +162,7 @@ function App() {
   }, [events, stats]);
 
   async function startRun(nextTask = task) {
-    if (!nextTask.trim() || running) return;
+    if (!nextTask.trim() || running || projectUploading) return;
     if (!config) {
       setError("The API configuration is still loading or unavailable. Confirm the backend is running, then reload the page.");
       return;
@@ -162,6 +175,9 @@ function App() {
     setPreviewError("");
     setSelectedFile("");
     setStats(null);
+    setChanges([]);
+    setChangesTruncated(false);
+    setSelectedChange("");
     setError("");
     setRunning(true);
     setActiveTab("activity");
@@ -175,6 +191,7 @@ function App() {
           planner_model: planner || config?.planner_model,
           coder_model: coder || config?.coder_model,
           max_steps: maxSteps,
+          project_id: project?.project_id,
         }),
         signal: AbortSignal.timeout(30_000),
       });
@@ -200,14 +217,25 @@ function App() {
           setStats(normalizeRunStats(event.stats));
           setRunning(false);
           connection.close();
-          void fetch(`/api/runs/${result.run_id}/files`)
-            .then(async (res) => {
-              if (!res.ok) throw new Error("The run completed, but its generated-file list could not be loaded.");
-              return res.json() as Promise<{ files: GeneratedFile[] }>;
+          void Promise.all([
+            fetch(`/api/runs/${result.run_id}/files`),
+            fetch(`/api/runs/${result.run_id}/diff`),
+          ])
+            .then(async ([filesResponse, diffResponse]) => {
+              if (!filesResponse.ok) throw new Error("The run completed, but its project-file list could not be loaded.");
+              if (!diffResponse.ok) throw new Error("The run completed, but its change summary could not be loaded.");
+              const [fileData, diffData] = await Promise.all([
+                filesResponse.json() as Promise<{ files: GeneratedFile[] }>,
+                diffResponse.json() as Promise<{ changes: ProjectChange[]; truncated: boolean }>,
+              ]);
+              return { fileData, diffData };
             })
-            .then((data) => {
-              setFiles(data.files);
-              setSelectedFile((selected) => selected || data.files[0]?.path || "");
+            .then(({ fileData, diffData }) => {
+              setFiles(fileData.files);
+              setSelectedFile(fileData.files[0]?.path || "");
+              setChanges(diffData.changes);
+              setChangesTruncated(diffData.truncated);
+              setSelectedChange(diffData.changes[0]?.path || "");
             })
             .catch((reason: Error) => setPreviewError(reason.message));
         } else if (event.type === "error") {
@@ -237,6 +265,48 @@ function App() {
         : reason instanceof Error ? reason.message : "Could not start the run.";
       setError(message);
       setRunning(false);
+    }
+  }
+
+  async function uploadProject(file: File | undefined) {
+    if (!file) return;
+    setProjectError("");
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      setProjectError("Choose a .zip archive of your project.");
+      return;
+    }
+    if (file.size > 10_000_000) {
+      setProjectError("Project ZIP files are limited to 10 MB.");
+      return;
+    }
+    setProjectUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch("/api/projects", { method: "POST", body: form });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Could not import this project.");
+      setProject(result as ImportedProject);
+    } catch (reason) {
+      setProjectError(reason instanceof Error ? reason.message : "Could not import this project.");
+    } finally {
+      setProjectUploading(false);
+      if (projectInput.current) projectInput.current.value = "";
+    }
+  }
+
+  async function removeProject() {
+    if (!project) return;
+    setProjectError("");
+    try {
+      const response = await fetch(`/api/projects/${project.project_id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(typeof result.detail === "string" ? result.detail : "Could not remove the imported project.");
+      }
+      setProject(null);
+    } catch (reason) {
+      setProjectError(reason instanceof Error ? reason.message : "Could not remove the imported project.");
     }
   }
 
@@ -282,7 +352,7 @@ function App() {
         <div className="workspace-label">WORKSPACE</div>
         <div className="workspace-switch">
           <span className="workspace-icon"><Folder size={15} /></span>
-          <span>Local workspace</span>
+          <span>{project?.name || "Local workspace"}</span>
         </div>
         <div className="side-section">
           <div className="side-heading">YOUR WORK</div>
@@ -343,16 +413,41 @@ function App() {
                 />
                 <div className="prompt-footer">
                   <div className="prompt-hint"><span className="language-pill"><Code2 size={13} /> Python + pytest</span><span className="hint-separator">·</span><span>Ctrl + Enter to run</span></div>
-                  <button className="submit-button" disabled={!task.trim() || running || !config} onClick={() => void startRun()}>
+                  <button className="submit-button" disabled={!task.trim() || running || projectUploading || !config} onClick={() => void startRun()}>
                     Build with AI <ArrowUp size={16} />
                   </button>
                 </div>
               </div>
+              <div className={`project-import ${project ? "has-project" : ""}`}>
+                <input
+                  ref={projectInput}
+                  className="sr-only"
+                  type="file"
+                  accept=".zip,application/zip"
+                  aria-label="Import a project ZIP"
+                  disabled={projectUploading || running}
+                  onChange={(event) => void uploadProject(event.target.files?.[0])}
+                />
+                <div className="project-import-copy">
+                  <span className="project-import-icon"><Folder size={17} /></span>
+                  <span><strong>{project ? project.name : "Patch an existing Python project"}</strong><small>{project ? `${project.file_count} files imported · copied into a run workspace` : "Import a .zip Python codebase to make a tested change in context."}</small></span>
+                </div>
+                {project ? (
+                  <button className="project-clear" type="button" onClick={() => void removeProject()} disabled={projectUploading || running} aria-label="Remove imported project">Remove</button>
+                ) : (
+                  <button className="project-upload-button" type="button" onClick={() => projectInput.current?.click()} disabled={projectUploading || running}>
+                    {projectUploading ? <LoaderCircle size={14} className="spin" /> : <Upload size={14} />}
+                    {projectUploading ? "Importing…" : "Choose ZIP"}
+                  </button>
+                )}
+              </div>
+              <div className="project-safety-note"><LockKeyhole size={12} /><span>Secrets and dependency caches are excluded. Only upload code you trust: project tests run on this server.</span></div>
+              {projectError && <div className="error-banner project-error"><XCircle size={15} />{projectError}</div>}
               {error && <div className="error-banner"><XCircle size={16} /> {error}</div>}
               <div className="suggestion-heading"><span>NEED A STARTING POINT?</span><span className="suggestion-line" /></div>
               <div className="suggestions">
                 {examples.map((example) => (
-                  <button className="suggestion-card" key={example.title} disabled={!config || running} onClick={() => { setTask(example.task); void startRun(example.task); }}>
+                  <button className="suggestion-card" key={example.title} disabled={!config || running || projectUploading} onClick={() => { setTask(example.task); void startRun(example.task); }}>
                     <span className="suggestion-icon">{example.icon}</span><span>{example.title}</span><ArrowUp size={14} className="suggestion-arrow" />
                   </button>
                 ))}
@@ -385,14 +480,16 @@ function App() {
                   {plan && <PlanPanel plan={plan} />}
                   <div className="panel-tabs">
                     <button className={activeTab === "output" ? "selected" : ""} onClick={() => setActiveTab("output")}><Code2 size={15} /> Files <span className="tab-count">{files.length}</span></button>
+                    <button className={activeTab === "review" ? "selected" : ""} onClick={() => setActiveTab("review")}><FileDiff size={15} /> Review <span className="tab-count">{changes.length}</span></button>
                     <button className={activeTab === "activity" ? "selected" : ""} onClick={() => setActiveTab("activity")}><Activity size={15} /> Activity <span className="tab-count">{events.length}</span></button>
                     <div className="panel-spacer" />
+                    {stats && files.length > 0 && <a className="download-button" href={`/api/runs/${runId}/download`} download><Download size={13} /> Download ZIP</a>}
                     {stats && <div className="stats-inline"><span><Gauge size={14} /> {stats.steps} steps</span><span><Layers3 size={14} /> {stats.tokens.toLocaleString()} tokens</span><span><Clock3 size={14} /> {stats.seconds}s</span></div>}
                   </div>
                   {activeTab === "output" ? (
                     <div className="file-workspace">
                       <div className="file-tree">
-                        <div className="tree-heading"><Folder size={14} /> GENERATED FILES</div>
+                        <div className="tree-heading"><Folder size={14} /> {project ? "PROJECT FILES" : "GENERATED FILES"}</div>
                         {files.length === 0 ? <div className="empty-files">{running ? "Files will appear as the agent builds…" : "No files were generated."}</div> : files.map((file) => (
                           <button className={`file-row ${selectedFile === file.path ? "selected" : ""}`} key={file.path} onClick={() => setSelectedFile(file.path)}>
                             <FileCode2 size={14} /><span>{file.path}</span>
@@ -404,6 +501,27 @@ function App() {
                           <div className="code-title"><span><FileCode2 size={14} /> {preview.path}</span><span className="language-label">PYTHON</span></div>
                           <pre><code>{preview.content}</code></pre>
                         </> : <div className="preview-empty"><Code2 size={22} /><span>{previewError || (running ? "The agent is writing code…" : "Select a generated file to preview it.")}</span></div>}
+                      </div>
+                    </div>
+                  ) : activeTab === "review" ? (
+                    <div className="review-workspace">
+                      <div className="review-file-list">
+                        <div className="tree-heading"><FileDiff size={14} /> CHANGED FILES</div>
+                        {changes.length === 0 ? <div className="empty-files">{running ? "Changes will appear when verification finishes…" : "No file changes to review."}</div> : changes.map((change) => (
+                          <button className={`review-file-row ${selectedChange === change.path ? "selected" : ""}`} key={change.path} onClick={() => setSelectedChange(change.path)}>
+                            <span className={`change-status ${change.status}`}>{change.status === "added" ? "+" : change.status === "deleted" ? "−" : "~"}</span><span>{change.path}</span>
+                          </button>
+                        ))}
+                        {changesTruncated && <div className="diff-truncated">Change preview capped for safety. Download the full workspace to inspect everything.</div>}
+                      </div>
+                      <div className="diff-preview">
+                        {(() => {
+                          const change = changes.find((item) => item.path === selectedChange);
+                          return change ? <>
+                            <div className="code-title"><span><FileDiff size={14} /> {change.path}</span><span className={`change-label ${change.status}`}>{change.status.toUpperCase()}</span></div>
+                            <pre className="diff-code">{change.diff.split("\n").map((line, index) => <span className={line.startsWith("+") && !line.startsWith("+++") ? "diff-add" : line.startsWith("-") && !line.startsWith("---") ? "diff-remove" : ""} key={`${index}-${line}`}>{line || " "}</span>)}</pre>
+                          </> : <div className="preview-empty"><FileDiff size={22} /><span>{running ? "The agent is working; the review appears after it finishes." : "No changes to review for this run."}</span></div>;
+                        })()}
                       </div>
                     </div>
                   ) : (
