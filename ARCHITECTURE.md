@@ -16,9 +16,9 @@ it.
 
 The single-page client is in `frontend/src/`:
 
-- `App.tsx` renders the task composer, example tasks, model and iteration
-  settings, current plan, run progress, file list and text preview, and guided
-  activity feed.
+- `App.tsx` renders the task composer, optional project ZIP import, model and
+  iteration settings, current plan, run progress, project files and text
+  preview, change review, download action, and guided activity feed.
 - `styles.css` provides the responsive visual system and small-screen layout.
 - `main.tsx` mounts the React application.
 - `vite.config.ts` serves the UI during development and proxies `/api` calls to
@@ -33,16 +33,18 @@ client.
 
 ### FastAPI service
 
-`app.py` is the HTTP API and process-level run coordinator. It validates run
-requests, stores each active or retained run in an in-memory registry, invokes
-the agent in a worker thread, streams run events using Server-Sent Events (SSE),
-and exposes generated-file listings and text previews.
+`app.py` is the HTTP API and process-level run coordinator. It safely extracts
+bounded project ZIPs into temporary snapshots, validates run requests, stores
+each active or retained run in an in-memory registry, invokes the agent in a
+worker thread, streams run events using Server-Sent Events (SSE), and exposes
+workspace files, text previews, unified diffs, and ZIP downloads.
 
 Run records hold a thread-safe event queue, the run's temporary workspace path,
-and completion statistics. The registry retains at most 30 runs; completed
-runs are evicted before a new run is rejected. If all retained entries are
-still active and the limit is reached, new requests receive HTTP 429. Run
-records and their workspaces are not persisted across API process restarts.
+the original project snapshot (when supplied), and completion statistics. The
+registry retains at most 30 runs and 10 unique imported project snapshots;
+completed runs are evicted before a new run is rejected. Unreferenced imported
+snapshots are deleted when removed or when their last retained run is evicted.
+Run records and workspaces are not persisted across API process restarts.
 
 ### Agent
 
@@ -53,16 +55,18 @@ records and their workspaces are not persisted across API process restarts.
 2. Normalize the plan into a stable structure. If the model wraps JSON in
    Markdown or returns plain text, attempt recovery and provide a readable
    fallback.
-3. Ask the coding model to work from the task and plan using the exposed
-   `write_file`, `run_command`, and `finish` tools.
-4. Apply writes beneath a unique temporary workspace, run allowed commands
+3. For imported projects, make a bounded file index available to both models
+   and let the coding model inspect selected UTF-8 files with `read_file`.
+4. Ask the coding model to work from the task and plan using the exposed
+   `list_files`, `read_file`, `write_file`, `run_command`, and `finish` tools.
+5. Apply writes beneath a unique temporary workspace, run allowed commands
    without a shell, and feed tool results (including recoverable errors) back to
    the coding model.
-5. When the model requests `finish`, independently invoke pytest. Accept the
+6. When the model requests `finish`, independently invoke pytest. Accept the
    result only if the process exits successfully and reports at least one
    passing test. Otherwise return the failure output to the model and allow it
    to repair the implementation and try again.
-6. If the model fails, the provider request fails, or the iteration budget is
+7. If the model fails, the provider request fails, or the iteration budget is
    exhausted, return a failed run with an explicit reason instead of a
    success-shaped result.
 
@@ -159,31 +163,39 @@ remain exclusively on the server.
 
 ## 4. Run lifecycle
 
-1. **Submit:** The browser sends a JSON request to `POST /api/runs`. The API
-   validates the task, model identifiers, and iteration limit, creates a run
-   ID and event queue, then starts the agent on a daemon worker thread. It
-   returns the run ID with HTTP 202 without waiting for model inference.
-2. **Plan:** The agent emits a planning phase event, calls the planner, and
+1. **Import (optional):** The browser sends a ZIP file to `POST /api/projects`.
+   The API enforces compressed, uncompressed, and file-count limits; rejects
+   path traversal, symlinks, duplicate paths, encrypted entries, and unsupported
+   compression; omits common secret files, Git metadata, and dependency caches;
+   then records the extracted snapshot under an opaque project ID.
+2. **Submit:** The browser sends a JSON request to `POST /api/runs`, optionally
+   including that project ID. The API validates the task, model identifiers,
+   and iteration limit, creates a run ID and event queue, then starts the agent
+   on a daemon worker thread. It returns the run ID with HTTP 202 without
+   waiting for model inference.
+3. **Plan:** The agent emits a planning phase event, calls the planner, and
    emits a plan event containing both the original text and normalized
    structure. The UI renders the objective and separately divided steps, files,
    tests, and risks.
-3. **Build:** The coder receives the task and plan. Each tool call is executed
-   by the backend. Successful writes appear in the file list; write conflicts
+4. **Build:** The agent copies the imported snapshot to a new run workspace.
+   The coder receives the task, plan, and safe file index. It can list files and
+   read bounded UTF-8 source files before changing them. Each tool call is
+   executed by the backend. Successful writes appear in the file list; conflicts
    and invalid tool calls are surfaced as recoverable errors so the coder can
    revise its action. Command output is returned to the coder and summarized in
    the activity feed.
-4. **Verify and repair:** `finish` does not trust the model's claim. The backend
+5. **Verify and repair:** `finish` does not trust the model's claim. The backend
    launches pytest independently. A failing test run emits a verification
    failure and its output, then returns that result to the coder for another
    correction attempt. An empty test suite does not count as a pass.
-5. **Complete or stop:** A passing independent check emits a verified finish
+6. **Complete or stop:** A passing independent check emits a verified finish
    event. Provider or orchestration exceptions emit an error event and failed
    statistics. If the maximum iteration count is reached without verified
    tests, the run stops as failed and explains that the limit was reached.
-6. **Review:** The frontend retrieves the final file list and lets users open
-   bounded-size UTF-8 text previews. The activity guidance recommends the next
-   action, such as reviewing code, addressing test output, or rerunning after a
-   configuration issue.
+7. **Review and export:** The frontend retrieves the final file list and a
+   bounded unified diff against the original snapshot. Users can open bounded
+   UTF-8 text previews, inspect added/modified/deleted files, and download the
+   resulting workspace as a ZIP. The activity guide recommends the next action.
 
 ## 5. HTTP API
 
@@ -191,21 +203,31 @@ remain exclusively on the server.
 | --- | --- |
 | `GET /api/health` | Returns a lightweight API health status. |
 | `GET /api/config` | Returns planner and coder model IDs plus whether an API key is configured. It never returns the key. |
-| `POST /api/runs` | Validates a task and starts a run. The JSON body contains `task`, `planner_model`, `coder_model`, and `max_steps`. The step limit is 1–20. |
+| `POST /api/projects` | Accepts a multipart ZIP upload. Compressed size is limited to 10 MB; extracted project size is limited to 20 MB and 200 files. |
+| `DELETE /api/projects/{project_id}` | Removes an imported project; snapshots referenced by retained runs stay available for diff review. |
+| `POST /api/runs` | Validates a task and starts a run. The JSON body contains `task`, `planner_model`, `coder_model`, `max_steps`, and optional `project_id`. The step limit is 1–20. |
 | `GET /api/runs/{run_id}/events` | Streams newline-delimited JSON SSE messages until completion, error, or client disconnect. Periodic SSE comments keep idle connections alive. |
-| `GET /api/runs/{run_id}/files` | Lists up to 100 generated files after or during a run when the workspace is available. |
+| `GET /api/runs/{run_id}/files` | Lists up to 100 safe workspace files after or during a run when available. |
 | `GET /api/runs/{run_id}/files/{path}` | Returns a UTF-8 text preview for a file in the run workspace. Files over 150 KB are not previewed. |
+| `GET /api/runs/{run_id}/diff` | Returns changed paths and unified text diffs, bounded to 1 MB total and 150 KB per file. |
+| `GET /api/runs/{run_id}/download` | Returns the run workspace as a ZIP, omitting common secrets and dependency/cache directories. |
 
 Unknown run IDs return 404. File paths are resolved under the run's workspace;
 outside paths are rejected. Invalid request bodies are rejected by FastAPI/Pydantic.
-Runs are held in process memory, so API restarts invalidate run IDs and history.
+Runs and imported-project IDs are held in process memory, so API restarts
+invalidate them and remove their temporary workspace references.
 
 ## 6. Agent tools and limits
 
-- `write_file(path, content)` accepts relative paths within the run workspace.
+- `write_file(path, content)` accepts relative paths within the run workspace
+  and refuses paths reserved for secrets or generated dependencies/caches.
   It detects file-versus-directory collisions, rejects paths that escape the
   workspace, limits a single file to 1 MB, and caps a workspace at 200 files
   and 20 MB.
+- `list_files()` returns at most 100 paths and omits common secret files,
+  dependency/cache directories, and symlinks.
+- `read_file(path)` reads only UTF-8 text up to 100 KB and rejects paths outside
+  the workspace, symlinks, and files matching the secret/cache exclusions.
 - `run_command(command)` accepts only commands whose executable is `pytest` or
   `python`. It tokenizes arguments and invokes subprocesses with `shell=False`.
   Python commands use the active Python interpreter. Commands have a timeout
@@ -213,8 +235,10 @@ Runs are held in process memory, so API restarts invalidate run IDs and history.
 - `finish(summary)` triggers the separate full pytest verification described
   above. It is not itself proof of success.
 
-The generated workspace is temporary and separate for each run. The temporary
-directory is **not** an operating-system security sandbox: model-generated
+The generated workspace is temporary and separate for each run. Imported ZIP
+projects are untrusted input; archive checks prevent common extraction attacks
+but do not inspect source code for malicious behavior. The temporary directory
+is **not** an operating-system security sandbox: model-generated or uploaded
 Python code and pytest tests execute as the local user. Command allowlisting
 does not make arbitrary Python code safe. Do not expose this service to
 untrusted users or run generated code you have not reviewed. For a hosted or

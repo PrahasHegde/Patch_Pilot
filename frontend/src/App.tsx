@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, ArrowUp, Check, CheckCircle2, ChevronDown, Circle, Clock3,
-  Code2, Command, Download, FileCode2, FileDiff, Folder, Gauge, GitBranch,
-  Layers3, LoaderCircle, LockKeyhole, Plus, Radio, RotateCcw, Sparkles,
-  Terminal, Upload, XCircle,
+  Activity, ArrowUp, Check, CheckCheck, CheckCircle2, ChevronDown, Circle,
+  Clock3, Code2, Command, Copy, Download, FileCode2, FileDiff, Folder,
+  Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Plus, Radio,
+  RotateCcw, Search, ShieldCheck, Sparkles, Terminal, Upload, XCircle,
 } from "lucide-react";
 
 type Config = {
@@ -69,10 +69,13 @@ function App() {
   const [changes, setChanges] = useState<ProjectChange[]>([]);
   const [changesTruncated, setChangesTruncated] = useState(false);
   const [selectedChange, setSelectedChange] = useState("");
+  const [fileQuery, setFileQuery] = useState("");
+  const [copiedFile, setCopiedFile] = useState("");
   const source = useRef<EventSource | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const taskInput = useRef<HTMLTextAreaElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
+  const fileSearchInput = useRef<HTMLInputElement>(null);
   const plannerDisplayName = formatNvidiaModel(planner || config?.planner_model || "nvidia/Nemotron-3-Ultra-550b-a55b");
   const coderDisplayName = formatNvidiaModel(coder || config?.coder_model || "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B");
 
@@ -101,10 +104,14 @@ function App() {
         event.preventDefault();
         taskInput.current?.focus();
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && activeTab === "output" && !taskInput.current) {
+        event.preventDefault();
+        fileSearchInput.current?.focus();
+      }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, []);
+  }, [activeTab]);
 
   function clearSession(nextTask = "") {
     if (running) return;
@@ -114,6 +121,8 @@ function App() {
     setPreview(null);
     setPreviewError("");
     setSelectedFile("");
+    setFileQuery("");
+    setCopiedFile("");
     setStats(null);
     setChanges([]);
     setChangesTruncated(false);
@@ -160,6 +169,25 @@ function App() {
       { label: "Verify", complete: verified, current: phase === "verifying" },
     ];
   }, [events, stats]);
+  const changeCounts = useMemo(() => ({
+    added: changes.filter((change) => change.status === "added").length,
+    modified: changes.filter((change) => change.status === "modified").length,
+    deleted: changes.filter((change) => change.status === "deleted").length,
+  }), [changes]);
+  const visibleFiles = useMemo(
+    () => files.filter((file) => file.path.toLowerCase().includes(fileQuery.trim().toLowerCase())),
+    [files, fileQuery],
+  );
+
+  async function copyPreview() {
+    if (!preview) return;
+    try {
+      await navigator.clipboard.writeText(preview.content);
+      setCopiedFile(preview.path);
+    } catch {
+      setError("Could not copy this file. Check clipboard permissions and try again.");
+    }
+  }
 
   async function startRun(nextTask = task) {
     if (!nextTask.trim() || running || projectUploading) return;
@@ -174,6 +202,8 @@ function App() {
     setPreview(null);
     setPreviewError("");
     setSelectedFile("");
+    setFileQuery("");
+    setCopiedFile("");
     setStats(null);
     setChanges([]);
     setChangesTruncated(false);
@@ -458,8 +488,8 @@ function App() {
             <section className="session">
               <div className="session-heading">
                 <div>
-                  <div className="eyebrow"><span className="eyebrow-icon"><Sparkles size={13} /></span> BUILD SESSION</div>
-                  <h1>{running ? "Bringing your idea to life." : stats?.passed ? "Built and verified." : "Build session complete."}</h1>
+                  <div className="eyebrow"><span className="eyebrow-icon"><Sparkles size={13} /></span> BUILD WORKSPACE <span className="session-context">{project ? project.name : "NEW PROJECT"}</span></div>
+                  <h1>{running ? "Your build is underway" : stats?.passed ? "Your build is verified" : "Review your build"}</h1>
                   <p className="session-task">{task}</p>
                 </div>
                 <button className="new-build-button" onClick={() => clearSession()} disabled={running}> <Plus size={15} /> New build</button>
@@ -475,6 +505,19 @@ function App() {
                 {stats && <span className={`result-label ${stats.passed ? "passed" : "failed"}`}>{stats.passed ? <CheckCircle2 size={14} /> : <XCircle size={14} />}{stats.passed ? "All tests passed" : "Needs attention"}</span>}
               </div>
 
+              {stats && <section className={`build-summary ${stats.passed ? "verified" : "attention"}`} aria-label="Build result summary">
+                <div className="build-summary-lead">
+                  <span className="summary-status-icon">{stats.passed ? <ShieldCheck size={20} /> : <XCircle size={20} />}</span>
+                  <span><strong>{stats.passed ? "Ready for your review" : "This build needs a closer look"}</strong><small>{stats.passed ? "The generated project passed PatchPilot's independent test check." : "The run finished without verified test success. Check Activity for details."}</small></span>
+                </div>
+                <div className="summary-metrics">
+                  <div className="summary-metric"><strong>{changes.length}</strong><span>files changed</span></div>
+                  <div className="summary-metric"><strong>{stats.test_output?.match(/(\d+) passed/)?.[1] || "—"}</strong><span>tests passed</span></div>
+                  <div className="summary-metric"><strong>{stats.seconds}<small>s</small></strong><span>time elapsed</span></div>
+                  <div className="summary-metric"><strong>{stats.steps}<small>/{maxSteps}</small></strong><span>agent steps</span></div>
+                </div>
+              </section>}
+
               <div className="results-layout">
                 <section className="result-panel">
                   {plan && <PlanPanel plan={plan} />}
@@ -489,24 +532,35 @@ function App() {
                   {activeTab === "output" ? (
                     <div className="file-workspace">
                       <div className="file-tree">
-                        <div className="tree-heading"><Folder size={14} /> {project ? "PROJECT FILES" : "GENERATED FILES"}</div>
-                        {files.length === 0 ? <div className="empty-files">{running ? "Files will appear as the agent builds…" : "No files were generated."}</div> : files.map((file) => (
+                        <div className="tree-heading"><Folder size={14} /><span>{project ? "PROJECT FILES" : "GENERATED FILES"}</span><span className="file-total">{files.length}</span></div>
+                        {files.length > 0 && <label className="file-search"><Search size={13} /><input ref={fileSearchInput} aria-label="Filter project files" placeholder="Filter files…" value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} /><kbd>Ctrl F</kbd></label>}
+                        {files.length === 0 ? <div className="empty-files">{running ? "Files will appear as the agent builds…" : "No files were generated yet. Check the Activity tab for the run result."}</div> : visibleFiles.length === 0 ? <div className="empty-files">No files match “{fileQuery}”.</div> : visibleFiles.map((file) => (
                           <button className={`file-row ${selectedFile === file.path ? "selected" : ""}`} key={file.path} onClick={() => setSelectedFile(file.path)}>
-                            <FileCode2 size={14} /><span>{file.path}</span>
+                            <FileCode2 size={14} /><span>{file.path}</span><small>{formatFileSize(file.size)}</small>
                           </button>
                         ))}
                       </div>
                       <div className="code-preview">
                         {preview ? <>
-                          <div className="code-title"><span><FileCode2 size={14} /> {preview.path}</span><span className="language-label">PYTHON</span></div>
-                          <pre><code>{preview.content}</code></pre>
+                          <div className="code-title">
+                            <span><FileCode2 size={14} /> {preview.path}</span>
+                            <span className="code-title-actions">
+                              <span className="language-label">{getFileLanguage(preview.path)}</span>
+                              <button className="copy-button" onClick={() => void copyPreview()} title="Copy file contents">
+                                {copiedFile === preview.path ? <CheckCheck size={13} /> : <Copy size={13} />}
+                                {copiedFile === preview.path ? "Copied" : "Copy"}
+                              </button>
+                            </span>
+                          </div>
+                          <pre className="source-code"><code>{getPreviewLines(preview.content).map((line, index) => <span className="source-line" key={index}><span className="line-number" aria-hidden="true">{index + 1}</span><span className="line-content">{line || " "}</span></span>)}</code></pre>
                         </> : <div className="preview-empty"><Code2 size={22} /><span>{previewError || (running ? "The agent is writing code…" : "Select a generated file to preview it.")}</span></div>}
                       </div>
                     </div>
                   ) : activeTab === "review" ? (
                     <div className="review-workspace">
                       <div className="review-file-list">
-                        <div className="tree-heading"><FileDiff size={14} /> CHANGED FILES</div>
+                        <div className="tree-heading"><FileDiff size={14} /><span>CHANGED FILES</span><span className="file-total">{changes.length}</span></div>
+                        {changes.length > 0 && <div className="change-counts"><span className="added">{changeCounts.added} added</span><span className="modified">{changeCounts.modified} changed</span><span className="deleted">{changeCounts.deleted} removed</span></div>}
                         {changes.length === 0 ? <div className="empty-files">{running ? "Changes will appear when verification finishes…" : "No file changes to review."}</div> : changes.map((change) => (
                           <button className={`review-file-row ${selectedChange === change.path ? "selected" : ""}`} key={change.path} onClick={() => setSelectedChange(change.path)}>
                             <span className={`change-status ${change.status}`}>{change.status === "added" ? "+" : change.status === "deleted" ? "−" : "~"}</span><span>{change.path}</span>
@@ -694,6 +748,38 @@ function normalizeRunStats(value: unknown): RunStats {
     tokens: numberOrZero(stats.tokens),
     seconds: numberOrZero(stats.seconds),
   };
+}
+
+function formatFileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getFileLanguage(path: string): string {
+  const extension = path.split(".").pop()?.toLowerCase() || "";
+  const languages: Record<string, string> = {
+    py: "PYTHON",
+    ts: "TYPESCRIPT",
+    tsx: "TSX",
+    js: "JAVASCRIPT",
+    jsx: "JSX",
+    json: "JSON",
+    md: "MARKDOWN",
+    css: "CSS",
+    html: "HTML",
+    yml: "YAML",
+    yaml: "YAML",
+    toml: "TOML",
+    txt: "TEXT",
+  };
+  return languages[extension] || (extension ? extension.toUpperCase() : "TEXT");
+}
+
+function getPreviewLines(content: string): string[] {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
 }
 
 function ActivityGuide({ guide, running }: { guide: ReturnType<typeof getActivityGuide>; running: boolean }) {

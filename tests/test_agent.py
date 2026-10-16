@@ -43,6 +43,78 @@ def test_write_file_creates_new_nested_file(tmp_path):
     assert written.read_text(encoding="utf-8") == "print('hello')"
 
 
+def test_agent_inspects_project_files_without_exposing_secrets(tmp_path):
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    (workspace / "main.py").write_text("answer = 42\n", encoding="utf-8")
+    (workspace / ".env").write_text("NEBIUS_API_KEY=private\n", encoding="utf-8")
+    (workspace / "node_modules").mkdir()
+    (workspace / "node_modules" / "dependency.js").write_text("private", encoding="utf-8")
+
+    assert agent.list_files(workspace) == "main.py (13 bytes)"
+    assert agent.read_file(workspace, "main.py") == "answer = 42\n"
+    try:
+        agent.read_file(workspace, ".env")
+    except ValueError as exc:
+        assert "excluded" in str(exc)
+    else:
+        raise AssertionError("Expected sensitive project files to be inaccessible")
+    try:
+        agent.write_file(workspace, ".env", "NEBIUS_API_KEY=generated\n")
+    except ValueError as exc:
+        assert "secret" in str(exc)
+    else:
+        raise AssertionError("Expected secret-file writes to be rejected")
+
+
+def test_run_agent_copies_uploaded_project_and_includes_its_file_index(monkeypatch, tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.py").write_text("def answer(): return 42\n", encoding="utf-8")
+    workspace = tmp_path / "run"
+    workspace.mkdir()
+    monkeypatch.setattr(agent.tempfile, "mkdtemp", lambda prefix: str(workspace))
+    monkeypatch.setattr(agent, "run_tests", lambda workdir: ("1 passed", True))
+    requests = []
+
+    def completion_create(**kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            message = SimpleNamespace(content='{"objective":"Update project","steps":["Implement"]}')
+        else:
+            tool_call = SimpleNamespace(
+                id="finish",
+                function=SimpleNamespace(name="finish", arguments='{"summary":"Done"}'),
+            )
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[tool_call],
+                model_dump=lambda **options: {"role": "assistant", "tool_calls": []},
+            )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(total_tokens=1),
+        )
+
+    fake_client = SimpleNamespace(
+        api_key="configured",
+        chat=SimpleNamespace(completions=SimpleNamespace(create=completion_create)),
+    )
+    monkeypatch.setattr(agent, "client", fake_client)
+
+    workdir, stats = agent.run_agent(
+        "Update the answer function",
+        on_event=lambda event: None,
+        project_source=source,
+    )
+
+    assert workdir == workspace
+    assert stats["passed"] is True
+    assert (workdir / "main.py").read_text(encoding="utf-8") == "def answer(): return 42\n"
+    assert "main.py" in requests[0]["messages"][1]["content"]
+    assert "main.py" in requests[1]["messages"][1]["content"]
+
+
 def test_write_file_enforces_workspace_size_limit(monkeypatch, tmp_path):
     workspace = tmp_path / "work"
     workspace.mkdir()
