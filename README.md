@@ -92,20 +92,25 @@ successfully and at least one test passes.
    Set `NEBIUS_API_KEY` to your own key. Keep `.env` private; it is excluded from
    the Docker build context and Git.
 
-2. Build and start the application from the project root:
+2. Build and start the application from the project root with Docker Compose:
 
    ```powershell
-   docker build -t patchpilot .
-   docker run --rm --name patchpilot -p 8000:8000 --env-file .env patchpilot
+   docker compose up --build -d
    ```
 
 3. Open [http://localhost:8000](http://localhost:8000). Check
    [http://localhost:8000/api/health](http://localhost:8000/api/health) for the
    API health endpoint.
 
+Follow container output with `docker compose logs -f`; stop the app with
+`docker compose down`. Set `PATCHPILOT_PORT` in `.env` if port 8000 is already
+in use. The compose configuration can also start without an API key so you can
+open the UI; add `NEBIUS_API_KEY` to `.env` to enable agent runs.
+
 On Windows, make sure Docker Desktop is running with Linux containers enabled
-before building. The container starts as a non-root user. Stop it with
-**Ctrl+C** or `docker stop patchpilot`.
+before building. The container runs as a non-root user. For a one-off run
+without Compose, build with `docker build -t patchpilot .` and start with
+`docker run --rm -p 8000:8000 --env-file .env patchpilot`.
 
 ## Run locally without Docker
 
