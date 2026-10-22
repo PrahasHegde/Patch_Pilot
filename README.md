@@ -20,8 +20,9 @@ whether an AI-generated result is actually verified.
 PatchPilot puts the loop in one place. A planner structures the work; a coding
 agent writes files and runs tests; the backend independently checks the final
 pytest result before reporting success. Failed checks are returned to the agent
-for repair within the configured iteration budget. The UI shows what the agent
-is doing, what it changed, what tests reported, and what the user can do next.
+for repair within an adaptive, bounded agent-turn budget. The UI shows the
+effective budget, what the agent is doing, what it changed, what tests reported,
+and what the user can do next.
 For existing Python projects, PatchPilot imports a bounded ZIP archive, lets the
 agent inspect relevant source files, compares the finished workspace to the
 original, and packages the result for download.
@@ -32,8 +33,9 @@ original, and packages the result for download.
 
 Try a sample task such as “Build an LRU cache with O(1) get/put operations and
 pytest tests.” Or upload a small trusted Python `.zip` project, ask for a focused
-change, inspect the unified diff and verification result, then download the
-patched project.
+change, inspect the planner's proposed project architecture alongside the
+implementation plan and activity, review the unified diff and verification
+result, then download the patched project.
 
 ## Architecture
 
@@ -46,7 +48,7 @@ flowchart LR
     UI -->|POST /api/runs| API[FastAPI service]
     UI <-->|SSE progress and results| API
     API -->|Plan request| P[NVIDIA Nemotron planner]
-    P -->|Structured plan| API
+    P -->|Structured plan + project architecture| API
     API -->|Task, plan, tool loop| C[NVIDIA Nemotron coder]
     C -->|list_files / read_file / write_file / run_command / finish| API
     S -->|Copy for this run| W[Per-run temporary workspace]
@@ -66,7 +68,18 @@ UI can compare changes against the uploaded snapshot and download the resulting
 workspace. SSE events carry the plan, phases, file writes, command results,
 verification failures, and final status. When the model calls `finish`, FastAPI
 runs pytest independently; the build is successful only when pytest exits
-successfully and at least one test passes.
+successfully and at least one test passes. The Architecture tab renders the
+planner's proposed components and labeled data/control-flow connections for
+the user's requested project; it does not diagram PatchPilot's own services or
+infer architecture from generated source files.
+
+The planner estimates an agent-turn budget after producing its plan. The
+estimate accounts for planned steps, files, tests, the uploaded project's
+visible file count, and task length. The default maximum is 30 turns; a run
+stops earlier as soon as independent tests pass. The UI reports the effective
+budget. The model client retries transient provider errors up to three times.
+This bounded retry behavior cannot resolve exhausted account quota, invalid
+credentials, or a provider-side limit that remains in force.
 
 ### Stack
 
@@ -160,9 +173,16 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 | `PLANNER_MODEL` | Planner model identifier. | `nvidia/Nemotron-3-Ultra-550b-a55b` |
 | `CODER_MODEL` | Coding and repair model identifier. | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` |
 
-You can change the model IDs and iteration limit in the run settings. The old
-coder alias `nvidia/Nemotron-3-Nano-30B-A3B` is normalized to the supported
-default ID.
+You can change the model IDs and maximum agent-turn budget in the run settings.
+The default cap is 30 turns, and the planner adapts the effective budget to
+each task up to that cap. Runs stop early once independent tests pass; the
+bounded budget avoids an unending run if the agent cannot resolve a failure.
+The model client retries transient provider errors up to three times. These
+retries do not increase provider quota or bypass invalid credentials or
+persistent account-level rate limits.
+
+The old coder alias `nvidia/Nemotron-3-Nano-30B-A3B` is normalized to the
+supported default ID.
 
 ## Benchmark
 
@@ -173,14 +193,14 @@ take several minutes.
 
 | Benchmark | Workload | Result | Reproduce |
 | --- | --- | --- | --- |
-| Local backend tests | API, project import, diff/download, agent paths, verification, and failure cases | **22 passed** in the latest validation run | `.\.venv\Scripts\python.exe -m pytest .\tests -q` |
+| Local backend tests | API, project import, diff/download, agent paths, adaptive budgets, planning, verification, and failure cases | **25 passed** in the latest validation run | `.\.venv\Scripts\python.exe -m pytest .\tests -q` |
 | Agent task benchmark | Token bucket, expression parser, interval merge, Trie, CSV-to-JSON | Not measured for this release | `.\.venv\Scripts\python.exe .\bench.py` |
 
 The agent benchmark prints a Markdown table with per-task pass/fail, iterations,
 elapsed seconds, and token counts, then prints an aggregate pass rate. It exits
 non-zero if any task fails. To compare runs, use the same task list, model IDs,
-iteration limit, and provider configuration; record the date and model IDs with
-the output. Benchmark figures are dependent on model availability and API
+maximum turn budget, and provider configuration; record the date and model IDs
+with the output. Benchmark figures are dependent on model availability and API
 response variability, so they should not be compared across different settings
 as if they were identical conditions.
 
@@ -206,10 +226,10 @@ npm run build
 | --- | --- | --- |
 | `GET` | `/api/health` | API health status |
 | `GET` | `/api/config` | Model IDs and whether the API key is configured (never the key itself) |
-| `POST` | `/api/runs` | Start a run with task, model IDs, and an iteration limit |
+| `POST` | `/api/runs` | Start a run with task, model IDs, and a maximum agent-turn budget |
 | `POST` | `/api/projects` | Import a bounded ZIP project archive |
 | `DELETE` | `/api/projects/{project_id}` | Remove an unused imported project |
-| `GET` | `/api/runs/{run_id}/events` | Stream run events over Server-Sent Events |
+| `GET` | `/api/runs/{run_id}/events` | Stream the planner's project architecture, plan, progress, and results over Server-Sent Events |
 | `GET` | `/api/runs/{run_id}/files` | List files in the run workspace |
 | `GET` | `/api/runs/{run_id}/files/{path}` | Preview a bounded UTF-8 text file |
 | `GET` | `/api/runs/{run_id}/diff` | Compare changed files to the uploaded project snapshot |

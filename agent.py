@@ -28,17 +28,32 @@ client = OpenAI(
     base_url="https://api.tokenfactory.nebius.com/v1/",
     api_key=os.getenv("NEBIUS_API_KEY", ""),
     timeout=120,
-    max_retries=1,
+    max_retries=3,
 )
 
 PLANNER_PROMPT = """You are a senior software architect. Analyze the task and return one JSON object only:
 {
   "objective": "one sentence describing the outcome",
+  "architecture": {
+    "components": [
+      {"id": "stable-id", "name": "Component name", "description": "Responsibility in this requested project"}
+    ],
+    "connections": [
+      {"from": "stable-id", "to": "stable-id", "label": "How data or control flows"}
+    ]
+  },
   "steps": ["ordered implementation step"],
   "files": ["path/to/file.py — purpose"],
   "tests": ["behavior or edge case to verify"],
   "risks": ["assumption or risk to watch"]
 }
+Design the architecture for the user's requested project, not for this agent or its tools.
+Always include the architecture object. Include 2-8 meaningful components and at least one
+connection when components interact. Describe the planned product's user-facing parts,
+services, data stores, or external systems as relevant, and the direction of important
+data/control flows. Use component IDs containing only lowercase letters, numbers,
+underscores, or hyphens. Do not use PatchPilot, FastAPI, Nebius, or this coding agent as
+components unless they are explicitly part of the user's requested product.
 Keep each list concise and specific. Use Python + pytest. Do not include markdown fences or code."""
 
 CODER_PROMPT = """You are an autonomous coding agent working in a sandbox directory.
@@ -268,6 +283,58 @@ def parse_plan(plan_text: str | None) -> dict[str, object]:
 
     objective = data.get("objective", "") if isinstance(data, dict) else ""
     objective = objective.strip() if isinstance(objective, str) else ""
+    architecture = data.get("architecture", {}) if isinstance(data, dict) else {}
+    if not isinstance(architecture, dict):
+        architecture = {}
+    raw_components = architecture.get("components", [])
+    components = []
+    seen_component_ids: set[str] = set()
+    if isinstance(raw_components, list):
+        for component in raw_components[:8]:
+            if not isinstance(component, dict):
+                continue
+            component_id = component.get("id")
+            name = component.get("name")
+            description = component.get("description", "")
+            if (
+                not isinstance(component_id, str)
+                or not re.fullmatch(r"[a-z0-9_-]{1,48}", component_id)
+                or component_id in seen_component_ids
+                or not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(description, str)
+            ):
+                continue
+            seen_component_ids.add(component_id)
+            components.append({
+                "id": component_id,
+                "name": name.strip()[:100],
+                "description": description.strip()[:240],
+            })
+    raw_connections = architecture.get("connections", [])
+    connections = []
+    seen_connections: set[tuple[str, str, str]] = set()
+    if isinstance(raw_connections, list):
+        for connection in raw_connections[:16]:
+            if not isinstance(connection, dict):
+                continue
+            source = connection.get("from")
+            target = connection.get("to")
+            label = connection.get("label", "")
+            if (
+                not isinstance(source, str)
+                or not isinstance(target, str)
+                or source not in seen_component_ids
+                or target not in seen_component_ids
+                or source == target
+                or not isinstance(label, str)
+            ):
+                continue
+            key = (source, target, label.strip()[:100])
+            if key in seen_connections:
+                continue
+            seen_connections.add(key)
+            connections.append({"from": key[0], "to": key[1], "label": key[2]})
     steps = values("steps")
     if not steps and raw:
         steps = [
@@ -279,6 +346,7 @@ def parse_plan(plan_text: str | None) -> dict[str, object]:
         objective = steps[0] if steps else "Implement the requested change and verify it with tests."
     return {
         "objective": objective,
+        "architecture": {"components": components, "connections": connections},
         "steps": steps or ["Implement the requested behavior."],
         "files": values("files"),
         "tests": values("tests"),
@@ -287,10 +355,25 @@ def parse_plan(plan_text: str | None) -> dict[str, object]:
     }
 
 
+def adaptive_step_budget(task: str, plan: dict[str, object], requested_max: int, project_files: str) -> int:
+    planned_work = sum(
+        len(plan.get(key, []))
+        for key in ("steps", "files", "tests")
+        if isinstance(plan.get(key), list)
+    )
+    existing_file_count = min(
+        sum(1 for line in project_files.splitlines() if line.strip()),
+        8,
+    )
+    task_complexity = min(len(task) // 1000, 4)
+    estimated_steps = 14 + planned_work + existing_file_count + task_complexity
+    return min(requested_max, max(18, estimated_steps))
+
+
 def run_agent(
     task: str,
     on_event=print,
-    max_steps=12,
+    max_steps=30,
     *,
     planner_model=None,
     coder_model=None,
@@ -299,8 +382,8 @@ def run_agent(
 ):
     if not isinstance(task, str) or not task.strip():
         raise ValueError("Describe the coding task before starting.")
-    if not isinstance(max_steps, int) or not 1 <= max_steps <= 20:
-        raise ValueError("max_steps must be between 1 and 20.")
+    if not isinstance(max_steps, int) or not 1 <= max_steps <= 30:
+        raise ValueError("max_steps must be between 1 and 30.")
     if not client.api_key:
         raise RuntimeError("NEBIUS_API_KEY is not configured. Add it to the project .env file and restart the app.")
 
@@ -326,6 +409,13 @@ def run_agent(
     stats["tokens"] += plan.usage.total_tokens if plan.usage else 0
     structured_plan = parse_plan(plan_text)
     on_event({"type": "plan", "text": plan_text, "plan": structured_plan})
+    step_budget = adaptive_step_budget(task, structured_plan, max_steps, project_files)
+    stats["max_steps"] = step_budget
+    on_event({
+        "type": "budget_adjusted",
+        "max_steps": step_budget,
+        "message": f"Adaptive run budget set to {step_budget} agent turns based on the task and project plan.",
+    })
 
     # --- Phase 2: code/test/fix loop with the fast model
     on_event({"type": "phase", "stage": "building", "message": "The coding agent is implementing the plan and preparing tests."})
@@ -335,7 +425,7 @@ def run_agent(
     messages = [{"role": "system", "content": CODER_PROMPT},
                 {"role": "user", "content": user_context}]
 
-    for step in range(max_steps):
+    for step in range(step_budget):
         stats["steps"] = step + 1
         resp = client.chat.completions.create(
             model=coder_model or CODER, messages=messages, tools=TOOLS, temperature=0.2)
@@ -396,7 +486,7 @@ def run_agent(
             messages.append({"role": "user", "content": "The independent test run failed. Read its output, fix the underlying issue, rerun pytest, and continue. Do not call finish() until all tests pass."})
 
     stats["status"] = "failed"
-    stats["failure_reason"] = f"Reached the {max_steps}-iteration limit before the agent verified the tests."
+    stats["failure_reason"] = f"Reached the adaptive {step_budget}-turn budget before the agent verified the tests."
     on_event({"type": "limit_reached", "message": stats["failure_reason"]})
     stats["seconds"] = round(time.time() - stats["start"], 1)
     return workdir, stats

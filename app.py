@@ -67,7 +67,7 @@ class RunRequest(BaseModel):
     task: str = Field(min_length=1, max_length=4000)
     planner_model: str = Field(min_length=1, max_length=200)
     coder_model: str = Field(min_length=1, max_length=200)
-    max_steps: int = Field(default=8, ge=1, le=20)
+    max_steps: int = Field(default=30, ge=1, le=30)
     project_id: str | None = None
 
 

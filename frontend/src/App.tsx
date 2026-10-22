@@ -19,6 +19,10 @@ type AgentEvent = {
 
 type StructuredPlan = {
   objective: string;
+  architecture: {
+    components: { id: string; name: string; description: string }[];
+    connections: { from: string; to: string; label: string }[];
+  };
   steps: string[];
   files: string[];
   tests: string[];
@@ -35,6 +39,7 @@ type RunStats = {
   status?: "running" | "passed" | "failed";
   failure_reason?: string;
   test_output?: string;
+  max_steps?: number;
   steps: number;
   tokens: number;
   seconds: number;
@@ -51,7 +56,7 @@ function App() {
   const [task, setTask] = useState("");
   const [planner, setPlanner] = useState("");
   const [coder, setCoder] = useState("");
-  const [maxSteps, setMaxSteps] = useState(8);
+  const [maxSteps, setMaxSteps] = useState(30);
   const [runId, setRunId] = useState("");
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [files, setFiles] = useState<GeneratedFile[]>([]);
@@ -61,7 +66,7 @@ function App() {
   const [stats, setStats] = useState<RunStats | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"output" | "review" | "activity">("output");
+  const [activeTab, setActiveTab] = useState<"output" | "review" | "activity" | "architecture">("output");
   const [recentTasks, setRecentTasks] = useState<string[]>([]);
   const [project, setProject] = useState<ImportedProject | null>(null);
   const [projectUploading, setProjectUploading] = useState(false);
@@ -138,8 +143,19 @@ function App() {
     if (!event) return null;
     if (typeof event.plan === "object" && event.plan !== null) {
       const value = event.plan as Partial<StructuredPlan>;
+      const architectureValue = value.architecture as Partial<StructuredPlan["architecture"]> | undefined;
+      const components = Array.isArray(architectureValue?.components)
+        ? architectureValue.components.filter((component): component is StructuredPlan["architecture"]["components"][number] =>
+          Boolean(component && typeof component.id === "string" && typeof component.name === "string" && typeof component.description === "string"))
+        : [];
+      const componentIds = new Set(components.map((component) => component.id));
+      const connections = Array.isArray(architectureValue?.connections)
+        ? architectureValue.connections.filter((connection): connection is StructuredPlan["architecture"]["connections"][number] =>
+          Boolean(connection && componentIds.has(connection.from) && componentIds.has(connection.to) && typeof connection.label === "string"))
+        : [];
       return {
         objective: typeof value.objective === "string" ? value.objective : "Implement the requested change and verify it with tests.",
+        architecture: { components, connections },
         steps: Array.isArray(value.steps) ? value.steps.filter((item): item is string => typeof item === "string" && Boolean(item.trim())) : [],
         files: Array.isArray(value.files) ? value.files.filter((item): item is string => typeof item === "string") : [],
         tests: Array.isArray(value.tests) ? value.tests.filter((item): item is string => typeof item === "string") : [],
@@ -151,6 +167,7 @@ function App() {
     const steps = raw.split(/\r?\n/).map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim()).filter(Boolean);
     return {
       objective: steps[0] || "Implement the requested change and verify it with tests.",
+      architecture: { components: [], connections: [] },
       steps: steps.length ? steps : ["Implement the requested behavior."],
       files: [],
       tests: [],
@@ -531,7 +548,7 @@ function App() {
                   <div className="summary-metric"><strong>{changes.length}</strong><span>files changed</span></div>
                   <div className="summary-metric"><strong>{stats.test_output?.match(/(\d+) passed/)?.[1] || "—"}</strong><span>tests passed</span></div>
                   <div className="summary-metric"><strong>{stats.seconds}<small>s</small></strong><span>time elapsed</span></div>
-                  <div className="summary-metric"><strong>{stats.steps}<small>/{maxSteps}</small></strong><span>agent steps</span></div>
+                  <div className="summary-metric"><strong>{stats.steps}<small>/{stats.max_steps ?? maxSteps}</small></strong><span>agent steps</span></div>
                 </div>
               </section>}
 
@@ -542,6 +559,7 @@ function App() {
                     <button className={activeTab === "output" ? "selected" : ""} onClick={() => setActiveTab("output")}><Code2 size={15} /> Files <span className="tab-count">{files.length}</span></button>
                     <button className={activeTab === "review" ? "selected" : ""} onClick={() => setActiveTab("review")}><FileDiff size={15} /> Review <span className="tab-count">{changes.length}</span></button>
                     <button className={activeTab === "activity" ? "selected" : ""} onClick={() => setActiveTab("activity")}><Activity size={15} /> Activity <span className="tab-count">{events.length}</span></button>
+                    <button className={activeTab === "architecture" ? "selected" : ""} onClick={() => setActiveTab("architecture")}><GitBranch size={15} /> Architecture</button>
                     <div className="panel-spacer" />
                     {stats && files.length > 0 && <a className="download-button" href={`/api/runs/${runId}/download`} download><Download size={13} /> Download ZIP</a>}
                     {stats && <div className="stats-inline"><span><Gauge size={14} /> {stats.steps} steps</span><span><Layers3 size={14} /> {stats.tokens.toLocaleString()} tokens</span><span><Clock3 size={14} /> {stats.seconds}s</span></div>}
@@ -595,7 +613,7 @@ function App() {
                         })()}
                       </div>
                     </div>
-                  ) : (
+                  ) : activeTab === "activity" ? (
                     <div className="activity-feed">
                       <ActivityGuide guide={activityGuide} running={running} />
                       {events.filter((event) => event.type !== "complete").map((event, index) => <ActivityItem event={event} key={`${event.type}-${index}`} />)}
@@ -603,6 +621,8 @@ function App() {
                       {error && <div className="error-banner"><XCircle size={16} />{error}</div>}
                       <div ref={bottomRef} />
                     </div>
+                  ) : (
+                    <ArchitecturePanel plan={plan} running={running} task={task} />
                   )}
                 </section>
                 <aside className="run-sidebar">
@@ -611,14 +631,14 @@ function App() {
                     <div className="overview-item"><span>Status</span><strong className={running ? "status-live" : stats?.passed ? "status-ok" : "status-idle"}><span className="status-dot" />{running ? "In progress" : stats?.passed ? "Verified" : stats ? "Review needed" : "Starting"}</strong></div>
                     <div className="overview-item"><span>Planner</span><strong title={planner}>{plannerDisplayName}</strong></div>
                     <div className="overview-item"><span>Coder</span><strong title={coder}>{coderDisplayName}</strong></div>
-                    <div className="overview-item"><span>Max iterations</span><strong>{maxSteps}</strong></div>
+                    <div className="overview-item"><span>Turn budget</span><strong>{stats?.max_steps ?? maxSteps}</strong></div>
                     {stats && <div className="overview-item"><span>Tests</span><strong className={stats.passed ? "status-ok" : "status-idle"}>{stats.passed ? "Passing" : "Not verified"}</strong></div>}
                   </div>
                   <details className="settings-card">
                     <summary><span><Gauge size={15} /> RUN SETTINGS</span><ChevronDown size={14} /></summary>
                     <label>Planner model<input value={planner} onChange={(event) => setPlanner(event.target.value)} disabled={running} /></label>
                     <label>Coder model<input value={coder} onChange={(event) => setCoder(event.target.value)} disabled={running} /></label>
-                    <label>Max iterations<div className="range-setting"><input type="range" min={1} max={20} value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))} disabled={running} /><span>{maxSteps}</span></div></label>
+                    <label>Maximum turns<div className="range-setting"><input type="range" min={1} max={30} value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))} disabled={running} /><span>{maxSteps}</span></div></label>
                   </details>
                   {error && <div className="error-banner compact"><XCircle size={15} /> {error}</div>}
                   {stats && !running && <button className="retry-button" onClick={() => void startRun()}><RotateCcw size={14} /> Run again</button>}
@@ -633,12 +653,136 @@ function App() {
   );
 }
 
+function ArchitecturePanel({ plan, running, task }: { plan: StructuredPlan | null; running: boolean; task: string }) {
+  const layout = useMemo(() => {
+    const components = plan?.architecture.components || [];
+    const connections = plan?.architecture.connections || [];
+    if (!components.length) return null;
+    const ranks = new Map(components.map((component) => [component.id, 0]));
+    const maxRank = Math.min(components.length - 1, 5);
+    for (let pass = 0; pass < components.length; pass += 1) {
+      let changed = false;
+      for (const edge of connections) {
+        const sourceRank = ranks.get(edge.from);
+        const targetRank = ranks.get(edge.to);
+        if (sourceRank !== undefined && targetRank !== undefined && sourceRank <= targetRank && targetRank < maxRank) {
+          ranks.set(edge.from, targetRank + 1);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+    const highestRank = Math.max(0, ...ranks.values());
+    const columns = new Map<number, typeof components>();
+    for (const component of components) {
+      const rank = highestRank - (ranks.get(component.id) || 0);
+      const column = columns.get(rank) || [];
+      column.push(component);
+      columns.set(rank, column);
+    }
+    const positions = new Map<string, { x: number; y: number }>();
+    for (const [rank, column] of columns) {
+      column.sort((left, right) => left.name.localeCompare(right.name));
+      column.forEach((component, index) => positions.set(component.id, { x: 36 + rank * 260, y: 32 + index * 96 }));
+    }
+    const tallestColumn = Math.max(...Array.from(columns.values(), (column) => column.length));
+    return {
+      positions,
+      width: Math.max(760, (highestRank + 1) * 260 + 280),
+      height: Math.max(340, tallestColumn * 96 + 54),
+    };
+  }, [plan]);
+
+  const components = plan?.architecture.components || [];
+  const connections = plan?.architecture.connections || [];
+  if (running && !plan) {
+    return (
+      <div className="architecture-empty">
+        <LoaderCircle size={20} className="spin" />
+        <strong>Planning your project architecture…</strong>
+        <span>The planner is designing the components and how they work together.</span>
+      </div>
+    );
+  }
+  if (!components.length || !layout) {
+    return (
+      <div className="architecture-empty">
+        <GitBranch size={20} />
+        <strong>The planner did not return an architecture for this request</strong>
+        <span>Review the implementation plan or run it again to generate a component diagram for: “{task}”</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="architecture-view">
+      <div className="architecture-heading">
+        <div><span>PLANNER DESIGN</span><h2>{plan?.objective || "Planned system architecture"}</h2></div>
+        <div className="architecture-stats">
+          <span><strong>{components.length}</strong> components</span>
+          <span><strong>{connections.length}</strong> connections</span>
+        </div>
+      </div>
+      <div className="architecture-request"><span>REQUEST</span><p>{task}</p></div>
+      <div className="architecture-legend"><span><i /> Planned components</span><span className="dependency-legend"><i /> Data / control flow</span></div>
+      <div className="architecture-canvas">
+        <svg
+          className="architecture-diagram"
+          width={layout.width}
+          height={layout.height}
+          viewBox={`0 0 ${layout.width} ${layout.height}`}
+          role="img"
+          aria-labelledby="architecture-title architecture-description"
+        >
+          <title id="architecture-title">Planned architecture for this request</title>
+          <desc id="architecture-description">Components and connections proposed by the planner for the user's project.</desc>
+          <defs>
+            <marker id="project-architecture-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" /></marker>
+          </defs>
+          {connections.map((edge, index) => {
+            const source = layout.positions.get(edge.from);
+            const target = layout.positions.get(edge.to);
+            if (!source || !target) return null;
+            const startX = source.x + 210;
+            const startY = source.y + 34;
+            const endX = target.x;
+            const endY = target.y + 34;
+            const bend = Math.max(45, Math.abs(endX - startX) * 0.45);
+            return (
+              <g key={`${edge.from}-${edge.to}-${index}`}>
+                <path className="architecture-edge" d={`M${startX} ${startY} C${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`} markerEnd="url(#project-architecture-arrow)" />
+                {edge.label && <text className="architecture-edge-label" x={(startX + endX) / 2} y={(startY + endY) / 2 - 8}>{edge.label}</text>}
+              </g>
+            );
+          })}
+          {components.map((component) => {
+            const position = layout.positions.get(component.id);
+            if (!position) return null;
+            return (
+              <g className="architecture-node" key={component.id}>
+                <rect x={position.x} y={position.y} width="210" height="68" rx="10" />
+                <text className="architecture-node-title" x={position.x + 13} y={position.y + 25}>{component.name.length > 27 ? `${component.name.slice(0, 26)}…` : component.name}</text>
+                <text className="architecture-node-detail" x={position.x + 13} y={position.y + 45}>{component.description.length > 32 ? `${component.description.slice(0, 31)}…` : component.description}</text>
+                <title>{`${component.name}: ${component.description}`}</title>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="architecture-caption"><GitBranch size={14} /><span>This is the system design proposed by the planner to guide implementation. The resulting code may evolve as the build progresses.</span></div>
+    </div>
+  );
+}
+
 function ActivityItem({ event }: { event: AgentEvent }) {
   if (event.type === "phase") {
     const stage = String(event.stage || "working");
     const label = stage === "planning" ? "Planning the work" : stage === "building" ? "Building the solution" : "Checking the result";
     return <div className="activity-item"><span className="activity-icon plan-icon"><Sparkles size={15} /></span><div className="activity-body"><div className="activity-title">{label}</div><div className="activity-note">{String(event.message || "")}</div></div></div>;
   }
+  if (event.type === "budget_adjusted") return (
+    <div className="activity-item"><span className="activity-icon plan-icon"><Gauge size={15} /></span><div className="activity-body"><div className="activity-title">Adaptive run budget</div><div className="activity-note">{String(event.message || `The run can use up to ${event.max_steps} agent turns and stops early once tests pass.`)}</div></div></div>
+  );
   if (event.type === "plan") return (
     <div className="activity-item plan-activity"><span className="activity-icon plan-icon"><CheckCircle2 size={15} /></span><div className="activity-body"><div className="activity-title">Plan ready</div><div className="activity-note">Review the structured plan above. Next, the coding agent will create the listed files and tests.</div></div></div>
   );
@@ -666,7 +810,7 @@ function ActivityItem({ event }: { event: AgentEvent }) {
     return <div className="activity-item"><span className={`activity-icon ${passed ? "test-icon" : succeeded ? "terminal-icon" : "error-icon"}`}>{passed ? <CheckCircle2 size={15} /> : succeeded ? <Terminal size={15} /> : <XCircle size={15} />}</span><div className="activity-body"><div className="activity-title">{label}: <code>{String(event.command || "command")}</code></div><div className="activity-note">{next}</div><pre className="terminal-output">{output || "(no output)"}</pre></div></div>;
   }
   if (event.type === "finish") return <div className="activity-item"><span className={`activity-icon ${event.verified ? "test-icon" : "error-icon"}`}>{event.verified ? <CheckCircle2 size={15} /> : <XCircle size={15} />}</span><div className="activity-body"><div className="activity-title">{event.verified ? "Final test verification passed" : "Final test verification failed"}</div><div className="activity-note">{event.verified ? "The build is complete. Review the generated files before using them." : "The build is not marked as successful. Review the test output below, then run the build again after addressing the issue."}</div>{event.output != null && <pre className="terminal-output">{String(event.output)}</pre>}</div></div>;
-  if (event.type === "limit_reached") return <div className="activity-item"><span className="activity-icon error-icon"><XCircle size={15} /></span><div className="activity-body"><div className="activity-title">Iteration limit reached</div><div className="activity-note">{String(event.message || "The agent stopped before verifying the tests.")} Increase the iteration limit or narrow the task, then run it again.</div></div></div>;
+  if (event.type === "limit_reached") return <div className="activity-item"><span className="activity-icon error-icon"><XCircle size={15} /></span><div className="activity-body"><div className="activity-title">Adaptive run budget reached</div><div className="activity-note">{String(event.message || "The agent stopped before verifying the tests.")} The run already used its task-adjusted budget. Review the remaining test output and adjust the task before starting another run.</div></div></div>;
   if (event.type === "error") return <div className="activity-item"><span className="activity-icon error-icon"><XCircle size={15} /></span><div className="activity-body"><div className="activity-title">The run stopped unexpectedly</div><div className="activity-note">{String(event.message || "")} Check your API key and model settings. Correct the issue, then select “Run again”.</div></div></div>;
   return null;
 }
@@ -713,17 +857,17 @@ function getActivityGuide(events: AgentEvent[], running: boolean, stats: RunStat
   const writes = events.filter((event) => event.type === "write").length;
   const tests = events.filter((event) => event.type === "run" && /pytest/.test(String(event.command || ""))).length;
 
-  if (lastError || error || stats?.status === "failed" && stats.failure_reason) {
+  if (!limitReached && (lastError || error || stats?.status === "failed" && stats.failure_reason)) {
     return { title: "This run needs your attention", message: String(lastError?.message || error || stats?.failure_reason), next: "Check the error details in the activity log. Fix the configuration or reduce the task scope, then run it again.", kind: "error" };
   }
   if (limitReached) return {
-    title: noTestsCollected ? "No tests were collected before the iteration limit" : "The agent reached its iteration limit",
+    title: noTestsCollected ? "No tests were collected within the run budget" : "The adaptive run budget was reached",
     message: noTestsCollected
-      ? "Pytest did not find discoverable tests, and the agent stopped before it could add them and verify the build."
-      : "The requested work may be partially complete, but it was not verified.",
+      ? "Pytest did not find discoverable tests before the task-adjusted turn budget was used."
+      : "The requested work may be partially complete, but it was not verified. PatchPilot used the available turns and retained the latest test output.",
     next: noTestsCollected
-      ? "Ask the agent to add test_*.py files and run python -m pytest -q, or increase the iteration limit and rerun."
-      : "Review the latest test output, increase the iteration limit or narrow the task, and rerun.",
+      ? "Review the Activity log and remaining files. The current run has already used its adaptive budget; narrow the task before starting another run."
+      : "Review the latest test output and changed files. The adaptive budget is capped at 30 turns to prevent an unbounded run; narrow the task before retrying.",
     kind: "error",
     output: testOutput,
   };
@@ -735,7 +879,7 @@ function getActivityGuide(events: AgentEvent[], running: boolean, stats: RunStat
         : "The independent pytest check did not pass. PatchPilot will not label an unverified result as successful.",
       next: noTestsCollected
         ? "Add tests in a discoverable test_*.py file, or ask the coding agent to create them, then run the task again."
-        : "Read the pytest output below, inspect the generated files, fix the reported issue, and run the task again.",
+        : "Read the pytest output below and inspect the generated files. The agent used its adaptive turn budget; narrow the task before starting another run.",
       kind: "error",
       output: testOutput,
     };
@@ -761,6 +905,7 @@ function normalizeRunStats(value: unknown): RunStats {
       : stats.passed === true ? "passed" : "failed",
     failure_reason: typeof stats.failure_reason === "string" ? stats.failure_reason : undefined,
     test_output: typeof stats.test_output === "string" ? stats.test_output : undefined,
+    max_steps: numberOrZero(stats.max_steps) || undefined,
     steps: numberOrZero(stats.steps),
     tokens: numberOrZero(stats.tokens),
     seconds: numberOrZero(stats.seconds),

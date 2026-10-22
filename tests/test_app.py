@@ -9,6 +9,16 @@ import app as app_module
 client = TestClient(app_module.app)
 
 
+def test_run_request_defaults_to_30_turn_cap():
+    request = app_module.RunRequest(
+        task="Build it",
+        planner_model="planner",
+        coder_model="coder",
+    )
+
+    assert request.max_steps == 30
+
+
 def test_health_and_config_do_not_expose_api_key(monkeypatch):
     monkeypatch.setenv("NEBIUS_API_KEY", "sensitive-test-key")
 

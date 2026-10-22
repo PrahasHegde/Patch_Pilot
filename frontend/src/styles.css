@@ -582,3 +582,47 @@ body { background: #0d100e; }
   .welcome-builder .suggestion-card { min-height: 43px; font-size: 10px; }
   .builder-footnote { justify-content: flex-start; gap: 5px; font-size: 8px; }
 }
+
+.panel-tabs { overflow-x: auto; }
+.panel-tabs > button { flex: 0 0 auto; white-space: nowrap; }
+.architecture-view { min-height: 410px; padding: 23px 22px 18px; background: radial-gradient(ellipse at 80% 0%, #718d3312, transparent 45%), #141714; }
+.architecture-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 2px 15px; }
+.architecture-heading > div > span { color: #a8c77a; font: 9px var(--mono); letter-spacing: .9px; }
+.architecture-heading h2 { margin: 6px 0 0; color: #e6ebdf; font-size: 15px; font-weight: 600; letter-spacing: -.3px; }
+.architecture-stats, .architecture-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: #858d80; font-size: 9px; }
+.architecture-stats strong { color: #e0e7d7; font: 600 11px var(--mono); }
+.architecture-stats > span { padding: 6px 8px; border: 1px solid #30382d; border-radius: 7px; background: #191d18; white-space: nowrap; }
+.architecture-request { margin: 0 2px 14px; padding: 9px 11px; border-left: 2px solid #8eaa5f; background: #1a1e18; }
+.architecture-request > span { color: #9fb477; font: 8px var(--mono); letter-spacing: .8px; }
+.architecture-request p { margin: 5px 0 0; color: #c4cbbd; font-size: 10px; line-height: 1.55; }
+.architecture-legend { margin: 0 3px 10px; gap: 13px; }
+.architecture-legend > span { display: flex; align-items: center; gap: 5px; }
+.architecture-legend i { width: 8px; height: 8px; border-radius: 3px; background: #94b36c; }
+.architecture-legend .dependency-legend { margin-left: auto; }
+.architecture-legend .dependency-legend i { width: 18px; height: 1px; border-radius: 0; background: #a9c879; }
+.architecture-canvas { overflow: auto; border: 1px solid #293029; border-radius: 12px; background: radial-gradient(circle at 50% 45%, #22291f, #121512 72%); scrollbar-color: #434c3c #171a17; }
+.architecture-diagram { display: block; max-width: none; }
+.architecture-edge { fill: none; stroke: #a9c879; stroke-width: 1.7; opacity: .72; }
+.architecture-edge-label { fill: #bdc7af; font: 9px Inter, "Segoe UI", sans-serif; text-anchor: middle; }
+.architecture-diagram marker path { fill: #a9c879; }
+.architecture-node rect { fill: #1b2119; stroke: #526343; stroke-width: 1.2; }
+.architecture-node-title { fill: #e4e9df; font: 600 11px Inter, "Segoe UI", sans-serif; }
+.architecture-node-detail { fill: #929b8b; font: 9px Inter, "Segoe UI", sans-serif; }
+.architecture-caption { margin: 13px 3px 0; display: flex; align-items: flex-start; gap: 8px; color: #929a8c; font-size: 10px; line-height: 1.6; }
+.architecture-caption svg { flex: 0 0 auto; margin-top: 1px; color: #a8c77a; }
+.architecture-empty { min-height: 340px; padding: 30px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #90988a; text-align: center; }
+.architecture-empty > svg { color: #a8c77a; }
+.architecture-empty strong { color: #dfe5d7; font-size: 13px; }
+.architecture-empty span { max-width: 520px; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .panel-tabs { gap: 12px; padding: 0 10px; }
+  .panel-tabs > button { gap: 5px; font-size: 9px; }
+  .architecture-view { min-height: 360px; padding: 16px 12px; }
+  .architecture-heading { align-items: flex-start; flex-direction: column; gap: 9px; }
+  .architecture-heading h2 { font-size: 13px; }
+  .architecture-request { margin-bottom: 11px; }
+  .architecture-legend { gap: 8px; font-size: 8px; }
+  .architecture-legend .dependency-legend { margin-left: 0; }
+  .architecture-caption { font-size: 9px; }
+}

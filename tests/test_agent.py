@@ -131,10 +131,21 @@ def test_write_file_enforces_workspace_size_limit(monkeypatch, tmp_path):
 
 def test_parse_plan_structures_json_and_recovers_plain_text():
     structured = agent.parse_plan(
-        '{"objective":"Build a parser","steps":["Tokenize input"],'
+        '{"objective":"Build a parser","architecture":{'
+        '"components":[{"id":"api","name":"API","description":"Handle requests"},'
+        '{"id":"store","name":"Store","description":"Persist data"}],'
+        '"connections":[{"from":"api","to":"store","label":"Read/write"}]},'
+        '"steps":["Tokenize input"],'
         '"files":["parser.py"],"tests":["Reject invalid input"],"risks":[]}'
     )
     assert structured["objective"] == "Build a parser"
+    assert structured["architecture"] == {
+        "components": [
+            {"id": "api", "name": "API", "description": "Handle requests"},
+            {"id": "store", "name": "Store", "description": "Persist data"},
+        ],
+        "connections": [{"from": "api", "to": "store", "label": "Read/write"}],
+    }
     assert structured["steps"] == ["Tokenize input"]
     assert structured["files"] == ["parser.py"]
     assert structured["tests"] == ["Reject invalid input"]
@@ -143,9 +154,45 @@ def test_parse_plan_structures_json_and_recovers_plain_text():
         'Here is the plan:\n```json\n{"objective":"Wrapped plan","steps":["Add parser"]}\n```'
     )
     assert wrapped["objective"] == "Wrapped plan"
+    assert wrapped["architecture"] == {"components": [], "connections": []}
 
     fallback = agent.parse_plan("1. Add validation\n2. Test invalid input")
     assert fallback["steps"] == ["Add validation", "Test invalid input"]
+    assert fallback["architecture"] == {"components": [], "connections": []}
+
+
+def test_parse_plan_drops_invalid_architecture_connections():
+    structured = agent.parse_plan(
+        '{"architecture":{"components":[{"id":"api","name":"API","description":"Requests"},'
+        '{"id":"bad id","name":"Invalid","description":"Invalid id"}],'
+        '"connections":[{"from":"api","to":"missing","label":"Unknown"},'
+        '{"from":"api","to":"api","label":"Self"}]}}'
+    )
+
+    assert structured["architecture"] == {
+        "components": [{"id": "api", "name": "API", "description": "Requests"}],
+        "connections": [],
+    }
+
+
+def test_adaptive_step_budget_scales_with_project_complexity():
+    simple_plan = {"steps": ["Implement"], "files": ["app.py"], "tests": ["Verify"]}
+    complex_plan = {
+        "steps": ["Implement", "Integrate", "Verify", "Harden", "Document"],
+        "files": ["api.py", "store.py", "worker.py", "tests.py"],
+        "tests": ["Success", "Failure", "Edge cases"],
+    }
+
+    simple = agent.adaptive_step_budget("Build a small tool", simple_plan, 30, "")
+    complex_project = agent.adaptive_step_budget(
+        "Build a larger service",
+        complex_plan,
+        30,
+        "\n".join(f"module_{index}.py" for index in range(20)),
+    )
+
+    assert 18 <= simple < complex_project <= 30
+    assert agent.adaptive_step_budget("task", complex_plan, 22, "") == 22
 
 
 def test_run_tests_uses_process_status_not_only_output(monkeypatch, tmp_path):
@@ -206,6 +253,7 @@ def test_finish_retries_when_independent_verification_fails(monkeypatch):
 
     assert stats["passed"] is True
     assert stats["status"] == "passed"
+    assert stats["max_steps"] == 3
     assert len(calls) == 3
     assert any(event["type"] == "verification_failed" for event in events)
     assert sum(event["type"] == "finish" for event in events) == 1
