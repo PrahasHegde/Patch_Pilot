@@ -8,6 +8,7 @@ services:
       - "${PATCHPILOT_PORT:-8000}:8000"
     environment:
       NEBIUS_API_KEY: "${NEBIUS_API_KEY:-}"
+      TAVILY_API_KEY: "${TAVILY_API_KEY:-}"
       PLANNER_MODEL: "${PLANNER_MODEL:-nvidia/Nemotron-3-Ultra-550b-a55b}"
       CODER_MODEL: "${CODER_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B}"
     init: true

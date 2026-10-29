@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, ArrowUp, Check, CheckCheck, CheckCircle2, ChevronDown, Circle,
+  Activity, ArrowUp, BookOpen, Check, CheckCheck, CheckCircle2, ChevronDown, Circle,
   Clock3, Code2, Command, Copy, Download, FileCode2, FileDiff, Folder,
-  Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Plus, Radio,
-  RotateCcw, Search, ShieldCheck, Sparkles, Terminal, Upload, XCircle,
+  ExternalLink, Gauge, GitBranch, Globe2, Layers3, LoaderCircle, LockKeyhole,
+  Plus, Radio, RotateCcw, Search, ShieldCheck, Sparkles, Terminal, Upload, XCircle,
 } from "lucide-react";
 
 type Config = {
   planner_model: string;
   coder_model: string;
   api_key_configured: boolean;
+  world_knowledge_configured: boolean;
 };
 
 type AgentEvent = {
@@ -32,6 +33,7 @@ type StructuredPlan = {
 
 type GeneratedFile = { path: string; size: number };
 type Preview = { path: string; content: string };
+type KnowledgeSource = { title: string; url: string; content: string; score?: number | null };
 type ImportedProject = { project_id: string; name: string; file_count: number };
 type ProjectChange = { path: string; status: "added" | "modified" | "deleted"; diff: string };
 type RunStats = {
@@ -57,6 +59,7 @@ function App() {
   const [planner, setPlanner] = useState("");
   const [coder, setCoder] = useState("");
   const [maxSteps, setMaxSteps] = useState(30);
+  const [useWorldKnowledge, setUseWorldKnowledge] = useState(false);
   const [runId, setRunId] = useState("");
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [files, setFiles] = useState<GeneratedFile[]>([]);
@@ -66,7 +69,7 @@ function App() {
   const [stats, setStats] = useState<RunStats | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"output" | "review" | "activity" | "architecture">("output");
+  const [activeTab, setActiveTab] = useState<"output" | "review" | "activity" | "architecture" | "knowledge">("output");
   const [recentTasks, setRecentTasks] = useState<string[]>([]);
   const [project, setProject] = useState<ImportedProject | null>(null);
   const [projectUploading, setProjectUploading] = useState(false);
@@ -181,11 +184,16 @@ function App() {
     const verified = events.some((event) => event.type === "finish" && event.verified === true)
       || Boolean(stats?.passed);
     return [
-      { label: "Plan", complete: hasPlan, current: phase === "planning" },
+      { label: "Plan", complete: hasPlan, current: phase === "research" || phase === "planning" },
       { label: "Build", complete: phase === "verifying" || verified, current: phase === "building" },
       { label: "Verify", complete: verified, current: phase === "verifying" },
     ];
   }, [events, stats]);
+  const activeBudget = [...events].reverse().find(
+    (event) => event.type === "budget_extended" || event.type === "budget_adjusted",
+  )?.max_steps;
+  const displayedBudget = stats?.max_steps
+    ?? (typeof activeBudget === "number" ? activeBudget : maxSteps);
   const changeCounts = useMemo(() => ({
     added: changes.filter((change) => change.status === "added").length,
     modified: changes.filter((change) => change.status === "modified").length,
@@ -195,6 +203,10 @@ function App() {
     () => files.filter((file) => file.path.toLowerCase().includes(fileQuery.trim().toLowerCase())),
     [files, fileQuery],
   );
+  const knowledgeCount = (() => {
+    const research = [...events].reverse().find((event) => event.type === "research");
+    return Array.isArray(research?.sources) ? research.sources.length : 0;
+  })();
 
   async function copyPreview() {
     if (!preview) return;
@@ -239,6 +251,7 @@ function App() {
           coder_model: coder || config?.coder_model,
           max_steps: maxSteps,
           project_id: project?.project_id,
+          use_world_knowledge: useWorldKnowledge,
         }),
         signal: AbortSignal.timeout(30_000),
       });
@@ -293,7 +306,7 @@ function App() {
         } else if (event.type === "write" && typeof event.path === "string") {
           const file = {
             path: event.path,
-            size: new TextEncoder().encode(String(event.content || "")).length,
+            size: typeof event.size === "number" ? event.size : 0,
           };
           setFiles((current) => [file, ...current.filter((item) => item.path !== file.path)]);
           setSelectedFile(file.path);
@@ -480,6 +493,22 @@ function App() {
                     </button>
                   </div>
                 </div>
+                <label className={`knowledge-toggle ${config?.world_knowledge_configured ? "available" : "unavailable"}`}>
+                  <input
+                    type="checkbox"
+                    checked={useWorldKnowledge}
+                    onChange={(event) => setUseWorldKnowledge(event.target.checked)}
+                    disabled={running || !config?.world_knowledge_configured}
+                  />
+                  <span className="knowledge-toggle-icon"><Globe2 size={16} /></span>
+                  <span className="knowledge-toggle-copy">
+                    <strong>World Knowledge <span>POWERED BY TAVILY</span></strong>
+                    <small>{config?.world_knowledge_configured
+                      ? "Search current docs, guides, code examples, and technical references for this task."
+                      : "Add TAVILY_API_KEY to .env to enable current web research."}</small>
+                  </span>
+                  <span className="knowledge-toggle-state">{useWorldKnowledge ? "On" : config?.world_knowledge_configured ? "Optional" : "Not configured"}</span>
+                </label>
                 <div className={`project-import ${project ? "has-project" : ""}`}>
                   <input
                     ref={projectInput}
@@ -560,6 +589,7 @@ function App() {
                     <button className={activeTab === "review" ? "selected" : ""} onClick={() => setActiveTab("review")}><FileDiff size={15} /> Review <span className="tab-count">{changes.length}</span></button>
                     <button className={activeTab === "activity" ? "selected" : ""} onClick={() => setActiveTab("activity")}><Activity size={15} /> Activity <span className="tab-count">{events.length}</span></button>
                     <button className={activeTab === "architecture" ? "selected" : ""} onClick={() => setActiveTab("architecture")}><GitBranch size={15} /> Architecture</button>
+                    <button className={activeTab === "knowledge" ? "selected" : ""} onClick={() => setActiveTab("knowledge")}><BookOpen size={15} /> Knowledge <span className="tab-count">{knowledgeCount}</span></button>
                     <div className="panel-spacer" />
                     {stats && files.length > 0 && <a className="download-button" href={`/api/runs/${runId}/download`} download><Download size={13} /> Download ZIP</a>}
                     {stats && <div className="stats-inline"><span><Gauge size={14} /> {stats.steps} steps</span><span><Layers3 size={14} /> {stats.tokens.toLocaleString()} tokens</span><span><Clock3 size={14} /> {stats.seconds}s</span></div>}
@@ -621,6 +651,8 @@ function App() {
                       {error && <div className="error-banner"><XCircle size={16} />{error}</div>}
                       <div ref={bottomRef} />
                     </div>
+                  ) : activeTab === "knowledge" ? (
+                    <KnowledgePanel events={events} running={running} />
                   ) : (
                     <ArchitecturePanel plan={plan} running={running} task={task} />
                   )}
@@ -631,7 +663,8 @@ function App() {
                     <div className="overview-item"><span>Status</span><strong className={running ? "status-live" : stats?.passed ? "status-ok" : "status-idle"}><span className="status-dot" />{running ? "In progress" : stats?.passed ? "Verified" : stats ? "Review needed" : "Starting"}</strong></div>
                     <div className="overview-item"><span>Planner</span><strong title={planner}>{plannerDisplayName}</strong></div>
                     <div className="overview-item"><span>Coder</span><strong title={coder}>{coderDisplayName}</strong></div>
-                    <div className="overview-item"><span>Turn budget</span><strong>{stats?.max_steps ?? maxSteps}</strong></div>
+                    <div className="overview-item"><span>Turn budget</span><strong>{displayedBudget}</strong></div>
+                    <div className="overview-item"><span>World knowledge</span><strong>{useWorldKnowledge ? "Tavily enabled" : "Off"}</strong></div>
                     {stats && <div className="overview-item"><span>Tests</span><strong className={stats.passed ? "status-ok" : "status-idle"}>{stats.passed ? "Passing" : "Not verified"}</strong></div>}
                   </div>
                   <details className="settings-card">
@@ -639,6 +672,7 @@ function App() {
                     <label>Planner model<input value={planner} onChange={(event) => setPlanner(event.target.value)} disabled={running} /></label>
                     <label>Coder model<input value={coder} onChange={(event) => setCoder(event.target.value)} disabled={running} /></label>
                     <label>Maximum turns<div className="range-setting"><input type="range" min={1} max={30} value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))} disabled={running} /><span>{maxSteps}</span></div></label>
+                    <label className="settings-knowledge"><input type="checkbox" checked={useWorldKnowledge} onChange={(event) => setUseWorldKnowledge(event.target.checked)} disabled={running || !config?.world_knowledge_configured} /><span>Use Tavily World Knowledge</span></label>
                   </details>
                   {error && <div className="error-banner compact"><XCircle size={15} /> {error}</div>}
                   {stats && !running && <button className="retry-button" onClick={() => void startRun()}><RotateCcw size={14} /> Run again</button>}
@@ -777,11 +811,19 @@ function ArchitecturePanel({ plan, running, task }: { plan: StructuredPlan | nul
 function ActivityItem({ event }: { event: AgentEvent }) {
   if (event.type === "phase") {
     const stage = String(event.stage || "working");
-    const label = stage === "planning" ? "Planning the work" : stage === "building" ? "Building the solution" : "Checking the result";
+    const label = stage === "research" ? "Searching world knowledge" : stage === "planning" ? "Planning the work" : stage === "building" ? "Building the solution" : "Checking the result";
     return <div className="activity-item"><span className="activity-icon plan-icon"><Sparkles size={15} /></span><div className="activity-body"><div className="activity-title">{label}</div><div className="activity-note">{String(event.message || "")}</div></div></div>;
+  }
+  if (event.type === "research") {
+    const sources = Array.isArray(event.sources) ? event.sources.length : 0;
+    const failed = event.status === "failed";
+    return <div className="activity-item"><span className={`activity-icon ${failed ? "error-icon" : "research-icon"}`}><Globe2 size={15} /></span><div className="activity-body"><div className="activity-title">{failed ? "World Knowledge search failed" : `Tavily found ${sources} useful source${sources === 1 ? "" : "s"}`}</div><div className="activity-note">{failed ? String(event.message || "Check the Tavily API key and network connection.") : "The planner and coding agent received current reference material. Open the Knowledge tab to review sources."}</div></div></div>;
   }
   if (event.type === "budget_adjusted") return (
     <div className="activity-item"><span className="activity-icon plan-icon"><Gauge size={15} /></span><div className="activity-body"><div className="activity-title">Adaptive run budget</div><div className="activity-note">{String(event.message || `The run can use up to ${event.max_steps} agent turns and stops early once tests pass.`)}</div></div></div>
+  );
+  if (event.type === "budget_extended") return (
+    <div className="activity-item"><span className="activity-icon plan-icon"><RotateCcw size={15} /></span><div className="activity-body"><div className="activity-title">Automatically extending the run</div><div className="activity-note">{String(event.message || `The agent made progress. Its budget is now ${event.max_steps} turns.`)}</div></div></div>
   );
   if (event.type === "plan") return (
     <div className="activity-item plan-activity"><span className="activity-icon plan-icon"><CheckCircle2 size={15} /></span><div className="activity-body"><div className="activity-title">Plan ready</div><div className="activity-note">Review the structured plan above. Next, the coding agent will create the listed files and tests.</div></div></div>
@@ -813,6 +855,60 @@ function ActivityItem({ event }: { event: AgentEvent }) {
   if (event.type === "limit_reached") return <div className="activity-item"><span className="activity-icon error-icon"><XCircle size={15} /></span><div className="activity-body"><div className="activity-title">Adaptive run budget reached</div><div className="activity-note">{String(event.message || "The agent stopped before verifying the tests.")} The run already used its task-adjusted budget. Review the remaining test output and adjust the task before starting another run.</div></div></div>;
   if (event.type === "error") return <div className="activity-item"><span className="activity-icon error-icon"><XCircle size={15} /></span><div className="activity-body"><div className="activity-title">The run stopped unexpectedly</div><div className="activity-note">{String(event.message || "")} Check your API key and model settings. Correct the issue, then select “Run again”.</div></div></div>;
   return null;
+}
+
+function isKnowledgeSource(value: unknown): value is KnowledgeSource {
+  if (typeof value !== "object" || value === null) return false;
+  const source = value as Record<string, unknown>;
+  if (typeof source.title !== "string" || typeof source.url !== "string" || typeof source.content !== "string") return false;
+  try {
+    const url = new URL(source.url);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function KnowledgePanel({ events, running }: { events: AgentEvent[]; running: boolean }) {
+  const research = [...events].reverse().find((event) => event.type === "research");
+  const sources = Array.isArray(research?.sources) ? research.sources.filter(isKnowledgeSource) : [];
+  const researching = running && [...events].reverse().some((event) => event.type === "phase" && event.stage === "research")
+    && !research;
+
+  return (
+    <div className="knowledge-panel">
+      <div className="knowledge-heading">
+        <div className="knowledge-heading-icon"><Globe2 size={18} /></div>
+        <div><h2>World Knowledge</h2><p>Current technical documentation and references gathered for this task.</p></div>
+        <span className="knowledge-provider">TAVILY</span>
+      </div>
+      {researching ? (
+        <div className="knowledge-empty"><LoaderCircle size={20} className="spin" /><strong>Searching the web</strong><span>Finding relevant documentation, guides, examples, and code references.</span></div>
+      ) : research?.status === "failed" ? (
+        <div className="knowledge-empty failed"><XCircle size={20} /><strong>Research could not be completed</strong><span>{String(research.message || "Check the Tavily configuration and try again.")}</span></div>
+      ) : sources.length ? (
+        <div className="knowledge-sources">
+          {sources.map((source, index) => (
+            <article className="knowledge-source" key={`${source.url}-${index}`}>
+              <div className="knowledge-source-title">
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <a href={source.url} target="_blank" rel="noreferrer">{source.title}<ExternalLink size={13} /></a>
+              </div>
+              <p>{source.content}</p>
+              <div className="knowledge-source-url">{source.url}</div>
+            </article>
+          ))}
+          <div className="knowledge-disclaimer">External search results are reference material. Always review the original source before relying on its guidance.</div>
+        </div>
+      ) : (
+        <div className="knowledge-empty">
+          <BookOpen size={20} />
+          <strong>{research ? "No usable sources returned" : "No research for this run"}</strong>
+          <span>{research ? "Tavily did not return readable documentation for this request." : running ? "Enable World Knowledge before starting a run to search current resources." : "Enable World Knowledge on the new-build screen and rerun your task to collect relevant resources."}</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function PlanPanel({ plan }: { plan: StructuredPlan }) {
@@ -867,7 +963,7 @@ function getActivityGuide(events: AgentEvent[], running: boolean, stats: RunStat
       : "The requested work may be partially complete, but it was not verified. PatchPilot used the available turns and retained the latest test output.",
     next: noTestsCollected
       ? "Review the Activity log and remaining files. The current run has already used its adaptive budget; narrow the task before starting another run."
-      : "Review the latest test output and changed files. The adaptive budget is capped at 30 turns to prevent an unbounded run; narrow the task before retrying.",
+      : "Review the latest test output and changed files. The run can extend to 60 turns when it is making progress, then performs one final independent test check.",
     kind: "error",
     output: testOutput,
   };
@@ -886,6 +982,7 @@ function getActivityGuide(events: AgentEvent[], running: boolean, stats: RunStat
   }
   if (stats?.passed) return { title: "Build verified", message: "The full test suite passed during independent verification.", next: "Open the Files tab to review or copy the generated code before using it.", kind: "success" };
   if (!running) return { title: "Ready to review", message: "The run has ended without a verified success.", next: "Review the latest event and generated files. You can run the task again after addressing any issue.", kind: "neutral" };
+  if (latestPhase?.stage === "research") return { title: "Step 1 · Research current knowledge", message: "Tavily is finding documentation and examples related to your request.", next: "The research results will be shared with the planner and coding agent, and you can review them in the Knowledge tab.", kind: "active" };
   if (latestPhase?.stage === "planning" || events.length === 0) return { title: "Step 1 · Understand and plan", message: "The planner is translating your request into concrete implementation and test steps.", next: "You can review the structured plan above as soon as it is ready.", kind: "active" };
   if (latestPhase?.stage === "verifying") return { title: "Step 3 · Verify the result", message: `The agent has made ${writes} file update${writes === 1 ? "" : "s"} and run ${tests} test command${tests === 1 ? "" : "s"}.`, next: "PatchPilot is running the complete pytest suite independently. A build only passes when this check succeeds.", kind: "active" };
   if (events.some((event) => event.type === "verification_failed")) return { title: "Step 2 · Fix the final test failures", message: "The independent verification caught an issue, so this build is not marked as successful.", next: "PatchPilot is reading the failure details above and will attempt a correction before verifying again.", kind: "active" };

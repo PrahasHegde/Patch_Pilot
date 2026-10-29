@@ -17,19 +17,26 @@ def test_run_request_defaults_to_30_turn_cap():
     )
 
     assert request.max_steps == 30
+    assert request.use_world_knowledge is False
 
 
 def test_health_and_config_do_not_expose_api_key(monkeypatch):
     monkeypatch.setenv("NEBIUS_API_KEY", "sensitive-test-key")
+    monkeypatch.setenv("TAVILY_API_KEY", "sensitive-tavily-test-key")
 
     assert client.get("/api/health").json() == {"status": "ok"}
     config = client.get("/api/config").json()
     assert config["api_key_configured"] is True
+    assert config["world_knowledge_configured"] is True
     assert "sensitive-test-key" not in str(config)
+    assert "sensitive-tavily-test-key" not in str(config)
 
 
 def test_run_stream_and_generated_file_endpoints(monkeypatch, tmp_path):
-    def fake_run_agent(task, on_event, max_steps, *, planner_model, coder_model, project_source, on_workspace):
+    received = {}
+
+    def fake_run_agent(task, on_event, max_steps, *, planner_model, coder_model, project_source, on_workspace, use_world_knowledge):
+        received["use_world_knowledge"] = use_world_knowledge
         on_workspace(tmp_path)
         on_event({"type": "plan", "text": "Create a small module."})
         (tmp_path / "result.py").write_text("answer = 42\n", encoding="utf-8")
@@ -37,6 +44,7 @@ def test_run_stream_and_generated_file_endpoints(monkeypatch, tmp_path):
         return tmp_path, {"passed": True, "steps": 1, "tokens": 12, "seconds": 0.1}
 
     monkeypatch.setattr(app_module.agent, "run_agent", fake_run_agent)
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-test-key")
     response = client.post(
         "/api/runs",
         json={
@@ -44,12 +52,14 @@ def test_run_stream_and_generated_file_endpoints(monkeypatch, tmp_path):
             "planner_model": "planner",
             "coder_model": "coder",
             "max_steps": 2,
+            "use_world_knowledge": True,
         },
     )
     assert response.status_code == 202
     run_id = response.json()["run_id"]
 
     events = client.get(f"/api/runs/{run_id}/events")
+    assert received["use_world_knowledge"] is True
     assert events.status_code == 200
     assert '"type": "plan"' in events.text
     assert '"type": "complete"' in events.text
@@ -64,6 +74,23 @@ def test_run_stream_and_generated_file_endpoints(monkeypatch, tmp_path):
     assert download.status_code == 200
     with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
         assert archive.read("result.py").replace(b"\r\n", b"\n") == b"answer = 42\n"
+
+
+def test_run_rejects_world_knowledge_without_tavily_key(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "task": "Build an app with current library APIs",
+            "planner_model": "planner",
+            "coder_model": "coder",
+            "use_world_knowledge": True,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "TAVILY_API_KEY" in response.json()["detail"]
 
 
 def test_unknown_run_returns_404():

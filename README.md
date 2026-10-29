@@ -9,6 +9,9 @@ PatchPilot turns a plain-language coding task into a planned, implemented, and
 independently tested Python project. It provides a React workspace with
 structured planning, live agent activity, project ZIP import, change diffs,
 generated-file previews, downloadable results, and test-verification feedback.
+Its optional World Knowledge feature searches current web references through
+Tavily and shares relevant documentation, guides, and code examples with both
+the planner and coding agent.
 
 ## The problem
 
@@ -47,6 +50,8 @@ flowchart LR
     API -->|Validated extraction| S[Temporary project snapshot]
     UI -->|POST /api/runs| API[FastAPI service]
     UI <-->|SSE progress and results| API
+    API -->|Optional documentation search| T[Tavily Search API]
+    T -->|Sourced reference excerpts| API
     API -->|Plan request| P[NVIDIA Nemotron planner]
     P -->|Structured plan + project architecture| API
     API -->|Task, plan, tool loop| C[NVIDIA Nemotron coder]
@@ -72,6 +77,10 @@ successfully and at least one test passes. The Architecture tab renders the
 planner's proposed components and labeled data/control-flow connections for
 the user's requested project; it does not diagram PatchPilot's own services or
 infer architecture from generated source files.
+When World Knowledge is enabled, the server searches Tavily before planning,
+passes a bounded set of source excerpts to the planner and coder, and streams
+the source links to the Knowledge tab. Web content is treated as untrusted
+reference material, and the Tavily API key remains server-side.
 
 The planner estimates an agent-turn budget after producing its plan. The
 estimate accounts for planned steps, files, tests, the uploaded project's
@@ -88,6 +97,7 @@ credentials, or a provider-side limit that remains in force.
 | User interface | React, TypeScript, Vite |
 | API and run orchestration | Python, FastAPI, Uvicorn |
 | Model API | OpenAI-compatible client to Nebius Token Factory |
+| Optional web research | Tavily Search API |
 | Default planner | NVIDIA Nemotron-3-Ultra-550b-a55b |
 | Default coder | NVIDIA Nemotron-3-Nano-30B-A3B |
 | Verification | pytest in the per-run workspace |
@@ -102,8 +112,9 @@ credentials, or a provider-side limit that remains in force.
    notepad .env
    ```
 
-   Set `NEBIUS_API_KEY` to your own key. Keep `.env` private; it is excluded from
-   the Docker build context and Git.
+   Set `NEBIUS_API_KEY` to your own key. To enable World Knowledge, also set
+   `TAVILY_API_KEY` to your Tavily API key. Keep `.env` private; it is excluded
+   from the Docker build context and Git.
 
 2. Build and start the application from the project root with Docker Compose:
 
@@ -170,6 +181,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `NEBIUS_API_KEY` | Server-side authentication to Nebius Token Factory. Required to run a task. | None |
+| `TAVILY_API_KEY` | Enables the optional World Knowledge web search before planning. | None |
 | `PLANNER_MODEL` | Planner model identifier. | `nvidia/Nemotron-3-Ultra-550b-a55b` |
 | `CODER_MODEL` | Coding and repair model identifier. | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` |
 
@@ -225,8 +237,8 @@ npm run build
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | API health status |
-| `GET` | `/api/config` | Model IDs and whether the API key is configured (never the key itself) |
-| `POST` | `/api/runs` | Start a run with task, model IDs, and a maximum agent-turn budget |
+| `GET` | `/api/config` | Model IDs and configured status for Nebius and optional Tavily keys (never the keys themselves) |
+| `POST` | `/api/runs` | Start a run with task, model IDs, turn budget, and optional `use_world_knowledge` |
 | `POST` | `/api/projects` | Import a bounded ZIP project archive |
 | `DELETE` | `/api/projects/{project_id}` | Remove an unused imported project |
 | `GET` | `/api/runs/{run_id}/events` | Stream the planner's project architecture, plan, progress, and results over Server-Sent Events |

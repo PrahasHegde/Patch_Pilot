@@ -69,6 +69,7 @@ class RunRequest(BaseModel):
     coder_model: str = Field(min_length=1, max_length=200)
     max_steps: int = Field(default=30, ge=1, le=30)
     project_id: str | None = None
+    use_world_knowledge: bool = False
 
 
 def _excluded_path(relative: str) -> bool:
@@ -201,6 +202,7 @@ def _run_agent(run_id: str, run: AgentRun, request: RunRequest) -> None:
             coder_model=request.coder_model,
             project_source=run.source_workdir,
             on_workspace=lambda path: setattr(run, "workdir", path),
+            use_world_knowledge=request.use_world_knowledge,
         )
         run.workdir = workdir
         run.stats = stats
@@ -230,6 +232,7 @@ def config() -> dict[str, Any]:
         "planner_model": agent.PLANNER,
         "coder_model": agent.CODER,
         "api_key_configured": bool(os.getenv("NEBIUS_API_KEY")),
+        "world_knowledge_configured": bool(os.getenv("TAVILY_API_KEY")),
     }
 
 
@@ -277,6 +280,11 @@ def delete_project(project_id: str) -> Response:
 def create_run(request: RunRequest) -> dict[str, str]:
     if not request.task.strip():
         raise HTTPException(status_code=422, detail="Describe the coding task before starting.")
+    if request.use_world_knowledge and not os.getenv("TAVILY_API_KEY"):
+        raise HTTPException(
+            status_code=400,
+            detail="World Knowledge requires TAVILY_API_KEY. Add your Tavily API key to the .env file and restart the app.",
+        )
     run_id = uuid.uuid4().hex
     with runs_lock:
         project = projects.get(request.project_id) if request.project_id else None

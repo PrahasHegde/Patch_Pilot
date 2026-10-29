@@ -1,3 +1,4 @@
+import json
 import subprocess
 from types import SimpleNamespace
 from pathlib import Path
@@ -75,6 +76,13 @@ def test_run_agent_copies_uploaded_project_and_includes_its_file_index(monkeypat
     workspace.mkdir()
     monkeypatch.setattr(agent.tempfile, "mkdtemp", lambda prefix: str(workspace))
     monkeypatch.setattr(agent, "run_tests", lambda workdir: ("1 passed", True))
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-test-key")
+    monkeypatch.setattr(agent, "search_tavily", lambda query: [{
+        "title": "Current docs",
+        "url": "https://example.com/docs",
+        "content": "Relevant API guidance.",
+        "score": 0.9,
+    }])
     requests = []
 
     def completion_create(**kwargs):
@@ -106,6 +114,7 @@ def test_run_agent_copies_uploaded_project_and_includes_its_file_index(monkeypat
         "Update the answer function",
         on_event=lambda event: None,
         project_source=source,
+        use_world_knowledge=True,
     )
 
     assert workdir == workspace
@@ -113,6 +122,67 @@ def test_run_agent_copies_uploaded_project_and_includes_its_file_index(monkeypat
     assert (workdir / "main.py").read_text(encoding="utf-8") == "def answer(): return 42\n"
     assert "main.py" in requests[0]["messages"][1]["content"]
     assert "main.py" in requests[1]["messages"][1]["content"]
+    assert "Relevant API guidance." in requests[0]["messages"][1]["content"]
+    assert "Relevant API guidance." in requests[1]["messages"][1]["content"]
+
+
+def test_search_tavily_sends_key_server_side_and_returns_valid_sources(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self, size):
+            return json.dumps({
+                "results": [
+                    {
+                        "title": "FastAPI guide",
+                        "url": "https://fastapi.tiangolo.com/tutorial/",
+                        "raw_content": "Use the documented request pattern.",
+                        "score": 0.98,
+                    },
+                    {
+                        "title": "Unsafe link",
+                        "url": "javascript:alert(1)",
+                        "content": "not a valid source",
+                    },
+                ],
+            }).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+
+    sources = agent.search_tavily("Build a FastAPI application", "private-test-key")
+
+    payload = json.loads(captured["request"].data)
+    assert captured["request"].full_url == agent.TAVILY_SEARCH_URL
+    assert captured["timeout"] == 30
+    assert payload["api_key"] == "private-test-key"
+    assert payload["query"] == "Build a FastAPI application"
+    assert payload["search_depth"] == "advanced"
+    assert len(sources) == 1
+    assert sources[0]["title"] == "FastAPI guide"
+    assert sources[0]["url"] == "https://fastapi.tiangolo.com/tutorial/"
+    assert sources[0]["content"] == "Use the documented request pattern."
+
+
+def test_search_tavily_fails_clearly_for_missing_api_key(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    try:
+        agent.search_tavily("Find current framework documentation")
+    except RuntimeError as exc:
+        assert "TAVILY_API_KEY" in str(exc)
+    else:
+        raise AssertionError("Expected missing Tavily configuration to be reported")
 
 
 def test_write_file_enforces_workspace_size_limit(monkeypatch, tmp_path):
@@ -193,6 +263,182 @@ def test_adaptive_step_budget_scales_with_project_complexity():
 
     assert 18 <= simple < complex_project <= 30
     assert agent.adaptive_step_budget("task", complex_plan, 22, "") == 22
+
+
+def test_compact_conversation_keeps_task_and_recent_tool_turns():
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "original task"},
+    ]
+    for turn in range(8):
+        messages.extend([
+            {"role": "assistant", "content": f"turn {turn}"},
+            {"role": "tool", "content": f"tool result {turn}"},
+        ])
+
+    compacted = agent.compact_conversation(messages, "pytest failed: assertion mismatch", keep_turns=3)
+
+    assert compacted[0] == messages[0]
+    assert compacted[1] == messages[1]
+    assert "pytest failed" in compacted[2]["content"]
+    assert len([message for message in compacted if message.get("role") == "assistant"]) == 3
+    assert compacted[-1]["content"] == "tool result 7"
+
+
+def test_run_agent_automatically_extends_budget_when_progressing(monkeypatch, tmp_path):
+    calls = []
+
+    def completion_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            message = SimpleNamespace(content='{"objective":"Build it","steps":["Implement"]}')
+        elif len(calls) == 2:
+            tool_call = SimpleNamespace(
+                id="write-1",
+                function=SimpleNamespace(name="write_file", arguments='{"path":"app.py","content":"print(1)"}'),
+            )
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[tool_call],
+                model_dump=lambda **options: {"role": "assistant", "tool_calls": []},
+            )
+        else:
+            tool_call = SimpleNamespace(
+                id="finish-1",
+                function=SimpleNamespace(name="finish", arguments='{"summary":"Done"}'),
+            )
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[tool_call],
+                model_dump=lambda **options: {"role": "assistant", "tool_calls": []},
+            )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(total_tokens=1),
+        )
+
+    fake_client = SimpleNamespace(
+        api_key="configured",
+        chat=SimpleNamespace(completions=SimpleNamespace(create=completion_create)),
+    )
+    monkeypatch.setattr(agent, "client", fake_client)
+    monkeypatch.setattr(agent, "adaptive_step_budget", lambda *args: 1)
+    monkeypatch.setattr(agent, "MAX_AGENT_TURNS", 2)
+    monkeypatch.setattr(agent, "run_tests", lambda workdir: ("1 passed", True))
+    events = []
+
+    workdir, stats = agent.run_agent("Build it", on_event=events.append, max_steps=1)
+
+    assert (workdir / "app.py").read_text(encoding="utf-8") == "print(1)"
+    assert stats["passed"] is True
+    assert stats["steps"] == 2
+    assert stats["max_steps"] == 2
+    assert any(event["type"] == "budget_extended" for event in events)
+
+
+def test_run_agent_stops_after_repeated_nonproductive_turns(monkeypatch):
+    calls = []
+
+    def completion_create(**kwargs):
+        calls.append(kwargs)
+        message = SimpleNamespace(
+            content="I will continue.",
+            tool_calls=None,
+            model_dump=lambda **options: {"role": "assistant", "content": "I will continue."},
+        )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(total_tokens=1),
+        )
+
+    fake_client = SimpleNamespace(
+        api_key="configured",
+        chat=SimpleNamespace(completions=SimpleNamespace(create=completion_create)),
+    )
+    monkeypatch.setattr(agent, "client", fake_client)
+    monkeypatch.setattr(
+        agent,
+        "run_tests",
+        lambda workdir: ("No tests were collected.", False),
+    )
+    events = []
+
+    _, stats = agent.run_agent("Build it", on_event=events.append, max_steps=30)
+
+    assert stats["passed"] is False
+    assert stats["steps"] == agent.MAX_IDLE_TURNS
+    assert "no implementation or test progress" in stats["failure_reason"]
+    assert stats["test_output"] == "No tests were collected."
+    assert not any(event["type"] == "budget_extended" for event in events)
+
+
+def test_run_agent_verifies_successful_pytest_command_without_finish(monkeypatch):
+    calls = []
+
+    def completion_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            message = SimpleNamespace(content='{"objective":"Build it","steps":["Implement"]}')
+        else:
+            tool_call = SimpleNamespace(
+                id="pytest-1",
+                function=SimpleNamespace(name="run_command", arguments='{"command":"python -m pytest -q"}'),
+            )
+            message = SimpleNamespace(
+                content=None,
+                tool_calls=[tool_call],
+                model_dump=lambda **options: {"role": "assistant", "tool_calls": []},
+            )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(total_tokens=1),
+        )
+
+    fake_client = SimpleNamespace(
+        api_key="configured",
+        chat=SimpleNamespace(completions=SimpleNamespace(create=completion_create)),
+    )
+    monkeypatch.setattr(agent, "client", fake_client)
+    monkeypatch.setattr(agent, "adaptive_step_budget", lambda *args: 1)
+    monkeypatch.setattr(agent, "run_command", lambda *args, **kwargs: "2 passed in 0.01s")
+    monkeypatch.setattr(agent, "run_tests", lambda workdir: ("2 passed in 0.02s", True))
+    events = []
+
+    _, stats = agent.run_agent("Build it", on_event=events.append, max_steps=1)
+
+    assert stats["passed"] is True
+    assert stats["status"] == "passed"
+    assert stats["test_output"] == "2 passed in 0.02s"
+    assert len(calls) == 2
+    assert any(event["type"] == "finish" and event["verified"] for event in events)
+
+
+def test_run_agent_runs_final_verification_after_agent_stops(monkeypatch):
+    def completion_create(**kwargs):
+        message = SimpleNamespace(
+            content="I will continue.",
+            tool_calls=None,
+            model_dump=lambda **options: {"role": "assistant", "content": "I will continue."},
+        )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(total_tokens=1),
+        )
+
+    fake_client = SimpleNamespace(
+        api_key="configured",
+        chat=SimpleNamespace(completions=SimpleNamespace(create=completion_create)),
+    )
+    monkeypatch.setattr(agent, "client", fake_client)
+    monkeypatch.setattr(agent, "run_tests", lambda workdir: ("1 passed in 0.01s", True))
+    events = []
+
+    _, stats = agent.run_agent("Build it", on_event=events.append, max_steps=30)
+
+    assert stats["passed"] is True
+    assert stats["status"] == "passed"
+    assert stats["test_output"] == "1 passed in 0.01s"
+    assert any(event["type"] == "finish" and event["verified"] for event in events)
 
 
 def test_run_tests_uses_process_status_not_only_output(monkeypatch, tmp_path):
