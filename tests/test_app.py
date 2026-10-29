@@ -98,6 +98,30 @@ def test_unknown_run_returns_404():
     assert response.status_code == 404
 
 
+def test_run_event_stream_replays_events_after_last_event_id():
+    run_id = "replay-test"
+    run = app_module.AgentRun()
+    with app_module.runs_lock:
+        app_module.runs[run_id] = run
+    try:
+        app_module._emit(run, {"type": "phase", "stage": "planning"})
+        app_module._emit(run, {"type": "plan", "text": "Create a module."})
+        app_module._emit(run, {"type": "complete", "run_id": run_id, "stats": {"passed": True}})
+
+        response = client.get(
+            f"/api/runs/{run_id}/events",
+            headers={"Last-Event-ID": "1"},
+        )
+
+        assert response.status_code == 200
+        assert "id: 2\ndata: {\"type\": \"plan\"" in response.text
+        assert "id: 3\ndata: {\"type\": \"complete\"" in response.text
+        assert "planning" not in response.text
+    finally:
+        with app_module.runs_lock:
+            app_module.runs.pop(run_id, None)
+
+
 def test_agent_exception_is_reported_as_failed_run(monkeypatch):
     def fake_run_agent(*args, **kwargs):
         raise RuntimeError("provider unavailable")
@@ -116,11 +140,11 @@ def test_agent_exception_is_reported_as_failed_run(monkeypatch):
     assert run.stats["failure_reason"] == "provider unavailable"
     assert run.stats["tokens"] == 0
     assert run.stats["steps"] == 0
-    assert run.events.get_nowait() == {
+    assert run.event_history == [{
         "type": "error",
         "message": "provider unavailable",
         "stats": run.stats,
-    }
+    }]
 
 
 def test_upload_project_flattens_root_and_omits_secrets_and_caches():

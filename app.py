@@ -4,7 +4,6 @@ import io
 import json
 import logging
 import os
-import queue
 import re
 import shutil
 import stat
@@ -38,7 +37,8 @@ app.add_middleware(
 
 @dataclass
 class AgentRun:
-    events: queue.Queue[dict[str, Any]] = field(default_factory=queue.Queue)
+    event_history: list[dict[str, Any]] = field(default_factory=list)
+    event_condition: threading.Condition = field(default_factory=threading.Condition)
     workdir: Path | None = None
     source_workdir: Path | None = None
     project_name: str | None = None
@@ -189,7 +189,18 @@ def _release_project_if_unused(workdir: Path) -> None:
 
 
 def _emit(run: AgentRun, event: dict[str, Any]) -> None:
-    run.events.put(event)
+    with run.event_condition:
+        run.event_history.append(event)
+        run.event_condition.notify_all()
+
+
+def _next_run_event(run: AgentRun, index: int, timeout: float) -> tuple[int, dict[str, Any] | None]:
+    with run.event_condition:
+        if index >= len(run.event_history):
+            run.event_condition.wait(timeout)
+        if index < len(run.event_history):
+            return index + 1, run.event_history[index]
+        return index, None
 
 
 def _run_agent(run_id: str, run: AgentRun, request: RunRequest) -> None:
@@ -324,17 +335,22 @@ def _get_run(run_id: str) -> AgentRun:
 @app.get("/api/runs/{run_id}/events")
 async def run_events(run_id: str, request: Request) -> StreamingResponse:
     run = _get_run(run_id)
+    last_event_id = request.headers.get("last-event-id", "0")
+    try:
+        cursor = max(0, int(last_event_id))
+    except ValueError:
+        cursor = 0
 
     async def stream():
+        nonlocal cursor
         while True:
             if await request.is_disconnected():
                 break
-            try:
-                event = await asyncio.to_thread(run.events.get, True, 15)
-            except queue.Empty:
+            cursor, event = await asyncio.to_thread(_next_run_event, run, cursor, 15)
+            if event is None:
                 yield ": keep-alive\n\n"
                 continue
-            yield f"data: {json.dumps(event)}\n\n"
+            yield f"id: {cursor}\ndata: {json.dumps(event)}\n\n"
             if event["type"] in {"complete", "error"}:
                 break
 
